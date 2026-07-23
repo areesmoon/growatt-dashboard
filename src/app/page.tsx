@@ -127,8 +127,8 @@ export default function Dashboard() {
                 />
                 {/* Teks SOC di dalam bar */}
                 <div className="absolute inset-0 flex items-center justify-center z-10 px-1">
-                  <span className="text-md font-black text-white drop-shadow-md">
-                    {master.soc?.toFixed(1) ?? "--"}%
+                  <span className="text-xl font-black text-white drop-shadow-md">
+                    {master.soc?.toFixed(0) ?? "--"}%
                   </span>
                 </div>
                 {/* Kepala Baterai Kecil di atas */}
@@ -175,8 +175,8 @@ export default function Dashboard() {
                   style={{ height: `${slave.soc ?? 0}%` }}
                 />
                 <div className="absolute inset-0 flex items-center justify-center z-10">
-                  <span className="text-md font-black text-white drop-shadow-md">
-                    {slave.soc?.toFixed(1) ?? "--"}%
+                  <span className="text-xl font-black text-white drop-shadow-md">
+                    {slave.soc?.toFixed(0) ?? "--"}%
                   </span>
                 </div>
                 <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-8 h-2 bg-slate-700 rounded-t-md"></div>
