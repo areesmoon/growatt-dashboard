@@ -29,7 +29,7 @@ export default function Dashboard() {
     try {
       const q = query(collection(db, "bms_logs"), orderBy("timestamp", "desc"), limit(20));
       const querySnapshot = await getDocs(q);
-      
+
       let docs: any[] = [];
       querySnapshot.forEach((doc) => {
         docs.push(doc.data());
@@ -94,7 +94,7 @@ export default function Dashboard() {
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 font-sans">
       <div className="max-w-6xl mx-auto space-y-6">
-        
+
         {/* Header */}
         <header className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-slate-800 pb-4">
           <div>
@@ -108,46 +108,99 @@ export default function Dashboard() {
 
         {/* Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          
+
           {/* Master Battery */}
           <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold text-blue-400">🔋 Master Battery</h2>
               <span className="text-xs px-2.5 py-1 rounded bg-blue-500/10 text-blue-400 font-medium">Hardware BMS</span>
             </div>
-            <div className="grid grid-cols-2 gap-4 items-center">
-              <div>
-                <p className="text-xs text-slate-400 uppercase tracking-wider">State of Charge</p>
-                <p className="text-5xl font-black mt-1 text-white">
-                  {master.soc ?? "--"}<span className="text-2xl text-slate-400">%</span>
-                </p>
+
+            {/* Tampilan Baru: Bar Baterai + Angka Besar */}
+            <div className="flex items-center gap-6">
+              {/* Battery Icon Bar (Vertical) */}
+              <div className="relative w-16 h-28 border-4 border-slate-700 rounded-xl bg-slate-800 p-1 flex flex-col-reverse overflow-hidden shadow-inner">
+                {/* Fill Bar (Warna Biru) - Tinggi disesuaikan SOC */}
+                <div
+                  className="w-full bg-blue-500 rounded-lg transition-all duration-500 ease-out"
+                  style={{ height: `${master.soc ?? 0}%` }}
+                />
+                {/* Teks SOC di dalam bar */}
+                <div className="absolute inset-0 flex items-center justify-center z-10 px-1">
+                  <span className="text-md font-black text-white drop-shadow-md">
+                    {master.soc?.toFixed(1) ?? "--"}%
+                  </span>
+                </div>
+                {/* Kepala Baterai Kecil di atas */}
+                <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-8 h-2 bg-slate-700 rounded-t-md"></div>
               </div>
-              <div className="space-y-1.5 text-sm font-mono border-l border-slate-800 pl-4">
-                <p className="text-slate-300">Tegangan: <span className="text-white font-bold">{master.voltage ?? "--"} V</span></p>
-                <p className="text-slate-300">Arus: <span className="text-white font-bold">{master.current ?? "--"} A</span></p>
-                <p className="text-slate-300">Daya: <span className="text-white font-bold">{master.power ?? "--"} W</span></p>
+
+              {/* Detail Teks di samping bar */}
+              <div className="flex-1 space-y-2.5 font-mono">
+                <div className="grid grid-cols-2 gap-1">
+                  <p className="text-slate-400 text-sm">Volt:</p>
+                  <p className="text-white font-bold text-sm text-right">{master.voltage ?? "--"} V</p>
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                  <p className="text-slate-400 text-sm">Arus:</p>
+                  <p className={`font-bold text-sm text-right ${master.current > 0 ? 'text-emerald-400' : master.current < 0 ? 'text-red-400' : 'text-white'}`}>
+                    {master.current ?? "--"} A
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                  <p className="text-slate-400 text-sm">Daya:</p>
+                  <p className="text-white font-bold text-sm text-right">{master.power ?? "--"} W</p>
+                </div>
               </div>
+            </div>
+            {/* Tambahan Status Kecil di bawah */}
+            <div className="mt-4 pt-3 border-t border-slate-800/70 text-xs text-slate-500 flex justify-between">
+              <span>SOH: {master.soh ?? "--"}%</span>
+              <span>Cycles: {master.cycleCount ?? "--"}</span>
             </div>
           </div>
 
-          {/* Slave Battery */}
+          {/* Slave Battery (Terapkan hal yang sama dengan warna ungu) */}
           <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold text-purple-400">🔋 Slave Battery</h2>
               <span className="text-xs px-2.5 py-1 rounded bg-purple-500/10 text-purple-400 font-medium">Virtual Ah</span>
             </div>
-            <div className="grid grid-cols-2 gap-4 items-center">
-              <div>
-                <p className="text-xs text-slate-400 uppercase tracking-wider">State of Charge</p>
-                <p className="text-5xl font-black mt-1 text-purple-300">
-                  {slave.soc ?? "--"}<span className="text-2xl text-slate-400">%</span>
-                </p>
+
+            {/* Tampilan Baru: Bar Baterai (Warna Ungu) */}
+            <div className="flex items-center gap-6">
+              <div className="relative w-16 h-28 border-4 border-slate-700 rounded-xl bg-slate-800 p-1 flex flex-col-reverse overflow-hidden shadow-inner">
+                <div
+                  className="w-full bg-purple-500 rounded-lg transition-all duration-500 ease-out"
+                  style={{ height: `${slave.soc ?? 0}%` }}
+                />
+                <div className="absolute inset-0 flex items-center justify-center z-10">
+                  <span className="text-md font-black text-white drop-shadow-md">
+                    {slave.soc?.toFixed(1) ?? "--"}%
+                  </span>
+                </div>
+                <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-8 h-2 bg-slate-700 rounded-t-md"></div>
               </div>
-              <div className="space-y-1.5 text-sm font-mono border-l border-slate-800 pl-4">
-                <p className="text-slate-300">Tegangan: <span className="text-white font-bold">{slave.voltage ?? "--"} V</span></p>
-                <p className="text-slate-300">Arus: <span className="text-white font-bold">{slave.current ?? "--"} A</span></p>
-                <p className="text-slate-300">Daya: <span className="text-white font-bold">{slave.power ?? "--"} W</span></p>
+
+              <div className="flex-1 space-y-2.5 font-mono">
+                <div className="grid grid-cols-2 gap-1">
+                  <p className="text-slate-400 text-sm">Volt:</p>
+                  <p className="text-white font-bold text-sm text-right">{slave.voltage ?? "--"} V</p>
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                  <p className="text-slate-400 text-sm">Arus:</p>
+                  <p className={`font-bold text-sm text-right ${slave.current > 0 ? 'text-emerald-400' : slave.current < 0 ? 'text-red-400' : 'text-white'}`}>
+                    {slave.current ?? "--"} A
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                  <p className="text-slate-400 text-sm">Daya:</p>
+                  <p className="text-white font-bold text-sm text-right">{slave.power ?? "--"} W</p>
+                </div>
               </div>
+            </div>
+            <div className="mt-4 pt-3 border-t border-slate-800/70 text-xs text-slate-500 text-center">
+              <span>SOC Calculation: Ah Counting w/ Master Weighting</span>
             </div>
           </div>
 
