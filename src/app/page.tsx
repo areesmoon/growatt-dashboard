@@ -23,6 +23,7 @@ const db = getFirestore(app);
 export default function Dashboard() {
   const [data, setData] = useState<any>(null);
   const [chartData, setChartData] = useState<any>({ labels: [], datasets: [] });
+  const [pvChartData, setPvChartData] = useState<any>({ labels: [], datasets: [] });
   const [loading, setLoading] = useState(true);
 
   const fetchData = async () => {
@@ -41,8 +42,11 @@ export default function Dashboard() {
         // Urutkan kronologis untuk chart (dari lama ke baru)
         const reversed = [...docs].reverse();
         const labels = reversed.map(d => new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+
         const masterSoc = reversed.map(d => d.master.soc);
         const slaveSoc = reversed.map(d => d.slave.soc);
+        const pvProduction = reversed.map(d => d.system.totalPpv || 0);
+        const loadConsumption = reversed.map(d => d.system.loadPower || 0);
 
         setChartData({
           labels,
@@ -60,6 +64,20 @@ export default function Dashboard() {
               data: slaveSoc,
               borderColor: '#c084fc',
               backgroundColor: 'rgba(192, 132, 252, 0.1)',
+              fill: true,
+              tension: 0.3,
+            }
+          ]
+        });
+
+        setPvChartData({
+          labels,
+          datasets: [
+            {
+              label: 'PV Production (W)',
+              data: pvProduction,
+              borderColor: '#fbbf24',
+              backgroundColor: 'rgba(251, 191, 36, 0.1)',
               fill: true,
               tension: 0.3,
             }
@@ -91,6 +109,10 @@ export default function Dashboard() {
   const slave = data?.slave || {};
   const system = data?.system || {};
 
+  // Status Battery Charging / Discharging berdasarkan totalPower (Positif = Charging, Negatif = Discharging)
+  const isCharging = system.totalPower > 0;
+  const isDischarging = system.totalPower < 0;
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 font-sans">
       <div className="max-w-6xl mx-auto space-y-6">
@@ -106,7 +128,52 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {/* Cards Grid */}
+        {/* Top Summary Banner: Compact Version (PV, Load, Charging) */}
+        <div className="grid grid-cols-3 gap-3">
+          {/* PV Power */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 backdrop-blur-sm shadow flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-mono uppercase tracking-wider text-amber-400">☀️ PV</p>
+              <h3 className="text-xl font-bold text-white font-mono mt-0.5">
+                {system.totalPpv ?? 0}<span className="text-xs font-normal text-slate-400">W</span>
+              </h3>
+            </div>
+            <span className="text-amber-400 text-lg">⚡</span>
+          </div>
+
+          {/* Load Consumption */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 backdrop-blur-sm shadow flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-mono uppercase tracking-wider text-blue-400">🏠 Load</p>
+              <h3 className="text-xl font-bold text-white font-mono mt-0.5">
+                {system.loadPower ?? 0}<span className="text-xs font-normal text-slate-400">W</span>
+              </h3>
+            </div>
+            <span className="text-blue-400 text-lg">💡</span>
+          </div>
+
+          {/* Charging Power */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 backdrop-blur-sm shadow flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-mono uppercase tracking-wider text-emerald-400">🔋 Charging</p>
+              <h3 className="text-xl font-bold text-white font-mono mt-0.5">
+                {system.totalPower ?? 0}<span className="text-xs font-normal text-slate-400">W</span>
+              </h3>
+              <p className="text-[10px] font-medium leading-none mt-1">
+                {isCharging ? (
+                  <span className="text-emerald-400 font-mono">● {system.totalCurrent}A</span>
+                ) : isDischarging ? (
+                  <span className="text-red-400 font-mono">● {system.totalCurrent}A</span>
+                ) : (
+                  <span className="text-slate-400 font-mono">● 0A</span>
+                )}
+              </p>
+            </div>
+            <span className="text-emerald-400 text-lg">🔌</span>
+          </div>
+        </div>
+
+        {/* Cards Grid (Master & Slave) */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
           {/* Master Battery */}
@@ -116,22 +183,18 @@ export default function Dashboard() {
               <span className="text-xs px-2.5 py-1 rounded bg-blue-500/10 text-blue-400 font-medium">Hardware BMS</span>
             </div>
 
-            {/* Tampilan Baru: Bar Baterai + Angka Besar */}
             <div className="flex items-center gap-6">
               {/* Battery Icon Bar (Vertical) */}
               <div className="relative w-16 h-28 border-4 border-slate-700 rounded-xl bg-slate-800 p-1 flex flex-col-reverse overflow-hidden shadow-inner">
-                {/* Fill Bar (Warna Biru) - Tinggi disesuaikan SOC */}
                 <div
                   className="w-full bg-blue-500 rounded-lg transition-all duration-500 ease-out"
                   style={{ height: `${master.soc ?? 0}%` }}
                 />
-                {/* Teks SOC di dalam bar */}
                 <div className="absolute inset-0 flex items-center justify-center z-10 px-1">
-                  <span className="text-xl font-black text-white drop-shadow-md">
-                    {master.soc?.toFixed(0) ?? "--"}%
+                  <span className="text-sm font-black text-white drop-shadow-md tracking-tighter">
+                    {master.soc?.toFixed(1) ?? "--"}%
                   </span>
                 </div>
-                {/* Kepala Baterai Kecil di atas */}
                 <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-8 h-2 bg-slate-700 rounded-t-md"></div>
               </div>
 
@@ -153,30 +216,28 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
-            {/* Tambahan Status Kecil di bawah */}
             <div className="mt-4 pt-3 border-t border-slate-800/70 text-xs text-slate-500 flex justify-between">
               <span>SOH: {master.soh ?? "--"}%</span>
               <span>Cycles: {master.cycleCount ?? "--"}</span>
             </div>
           </div>
 
-          {/* Slave Battery (Terapkan hal yang sama dengan warna ungu) */}
+          {/* Slave Battery */}
           <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold text-purple-400">🔋 Slave Battery</h2>
               <span className="text-xs px-2.5 py-1 rounded bg-purple-500/10 text-purple-400 font-medium">Virtual Ah</span>
             </div>
 
-            {/* Tampilan Baru: Bar Baterai (Warna Ungu) */}
             <div className="flex items-center gap-6">
               <div className="relative w-16 h-28 border-4 border-slate-700 rounded-xl bg-slate-800 p-1 flex flex-col-reverse overflow-hidden shadow-inner">
                 <div
                   className="w-full bg-purple-500 rounded-lg transition-all duration-500 ease-out"
                   style={{ height: `${slave.soc ?? 0}%` }}
                 />
-                <div className="absolute inset-0 flex items-center justify-center z-10">
-                  <span className="text-xl font-black text-white drop-shadow-md">
-                    {slave.soc?.toFixed(0) ?? "--"}%
+                <div className="absolute inset-0 flex items-center justify-center z-10 px-1">
+                  <span className="text-sm font-black text-white drop-shadow-md tracking-tighter">
+                    {slave.soc?.toFixed(1) ?? "--"}%
                   </span>
                 </div>
                 <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-8 h-2 bg-slate-700 rounded-t-md"></div>
@@ -206,11 +267,22 @@ export default function Dashboard() {
 
         </div>
 
-        {/* Chart Section */}
-        <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
-          <h2 className="text-base font-semibold text-slate-200 mb-4">📈 Grafik Perbandingan SOC (Master vs Slave)</h2>
-          <div className="h-72 w-full">
-            <ChartComponent data={chartData} />
+        {/* Charts Section */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* SOC Chart */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
+            <h2 className="text-base font-semibold text-slate-200 mb-4">📈 Grafik Perbandingan SOC</h2>
+            <div className="h-64 w-full">
+              <ChartComponent data={chartData} yMin={0} yMax={100} />
+            </div>
+          </div>
+
+          {/* PV Production Chart */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
+            <h2 className="text-base font-semibold text-amber-400 mb-4">☀️ Grafik PV Production (W)</h2>
+            <div className="h-64 w-full">
+              <ChartComponent data={pvChartData} />
+            </div>
           </div>
         </div>
 
@@ -220,14 +292,14 @@ export default function Dashboard() {
 }
 
 // Komponen pembantu untuk Chart agar aman dari SSR hydration error di Next.js
-function ChartComponent({ data }: { data: any }) {
+function ChartComponent({ data, yMin, yMax }: { data: any; yMin?: number; yMax?: number }) {
   const options = {
     responsive: true,
     maintainAspectRatio: false,
     scales: {
       y: {
-        min: 0,
-        max: 100,
+        min: yMin,
+        max: yMax,
         grid: { color: 'rgba(51, 65, 85, 0.4)' },
         ticks: { color: '#94a3b8' }
       },
