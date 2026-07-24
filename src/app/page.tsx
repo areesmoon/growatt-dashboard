@@ -20,15 +20,22 @@ const firebaseConfig = {
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0];
 const db = getFirestore(app);
 
+// Ambil kapasitas nominal & nama collection dari environment variable Next.js
+const MASTER_CAPACITY_AH = parseFloat(process.env.NEXT_PUBLIC_MASTER_CAPACITY_AH || "200");
+const SLAVE_CAPACITY_AH = parseFloat(process.env.NEXT_PUBLIC_SLAVE_CAPACITY_AH || "100");
+const FIRESTORE_COLLECTION = process.env.NEXT_PUBLIC_FIRESTORE_COLLECTION || "bms_logs_test";
+
 export default function Dashboard() {
   const [data, setData] = useState<any>(null);
   const [chartData, setChartData] = useState<any>({ labels: [], datasets: [] });
   const [pvChartData, setPvChartData] = useState<any>({ labels: [], datasets: [] });
+  const [loadChartData, setLoadChartData] = useState<any>({ labels: [], datasets: [] });
   const [loading, setLoading] = useState(true);
 
   const fetchData = async () => {
     try {
-      const q = query(collection(db, "bms_logs"), orderBy("timestamp", "desc"), limit(20));
+      // Tarik limit 300 data untuk mencakup data penuh seharian (00:00 - selesai)
+      const q = query(collection(db, FIRESTORE_COLLECTION), orderBy("timestamp", "desc"), limit(300));
       const querySnapshot = await getDocs(q);
 
       let docs: any[] = [];
@@ -37,9 +44,9 @@ export default function Dashboard() {
       });
 
       if (docs.length > 0) {
-        setData(docs[0]); // Ambil data paling baru
+        setData(docs[0]); // Ambil data paling baru untuk card atas
 
-        // Urutkan kronologis untuk chart (dari lama ke baru)
+        // Urutkan kronologis untuk chart (dari yang paling lama ke yang terbaru hari ini)
         const reversed = [...docs].reverse();
         const labels = reversed.map(d => new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
 
@@ -83,6 +90,20 @@ export default function Dashboard() {
             }
           ]
         });
+
+        setLoadChartData({
+          labels,
+          datasets: [
+            {
+              label: 'Load Consumption (W)',
+              data: loadConsumption,
+              borderColor: '#38bdf8',
+              backgroundColor: 'rgba(56, 189, 248, 0.1)',
+              fill: true,
+              tension: 0.3,
+            }
+          ]
+        });
       }
       setLoading(false);
     } catch (err) {
@@ -109,7 +130,6 @@ export default function Dashboard() {
   const slave = data?.slave || {};
   const system = data?.system || {};
 
-  // Status Battery Charging / Discharging berdasarkan totalPower (Positif = Charging, Negatif = Discharging)
   const isCharging = system.totalPower > 0;
   const isDischarging = system.totalPower < 0;
 
@@ -121,16 +141,15 @@ export default function Dashboard() {
         <header className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-slate-800 pb-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-emerald-400">⚡ {data?.plantName || "BMS Monitor"}</h1>
-            <p className="text-xs text-slate-400 font-mono">Device SN: {data?.deviceSn || "-"}</p>
+            <p className="text-xs text-slate-400 font-mono">Device SN: {data?.deviceSn || "-"} | Collection: <span className="text-emerald-400">{FIRESTORE_COLLECTION}</span></p>
           </div>
           <div className="text-xs bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-full text-slate-300 mt-2 md:mt-0 font-mono">
             🕒 Update: {data?.timestamp ? new Date(data.timestamp).toLocaleTimeString() : "-"}
           </div>
         </header>
 
-        {/* Top Summary Banner: Compact Version (PV, Load, Charging) */}
+        {/* Top Summary Banner */}
         <div className="grid grid-cols-3 gap-3">
-          {/* PV Power */}
           <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 backdrop-blur-sm shadow flex items-center justify-between">
             <div>
               <p className="text-[10px] font-mono uppercase tracking-wider text-amber-400">☀️ PV</p>
@@ -141,7 +160,6 @@ export default function Dashboard() {
             <span className="text-amber-400 text-lg">⚡</span>
           </div>
 
-          {/* Load Consumption */}
           <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 backdrop-blur-sm shadow flex items-center justify-between">
             <div>
               <p className="text-[10px] font-mono uppercase tracking-wider text-blue-400">🏠 Load</p>
@@ -152,7 +170,6 @@ export default function Dashboard() {
             <span className="text-blue-400 text-lg">💡</span>
           </div>
 
-          {/* Charging Power */}
           <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 backdrop-blur-sm shadow flex items-center justify-between">
             <div>
               <p className="text-[10px] font-mono uppercase tracking-wider text-emerald-400">🔋 Charging</p>
@@ -180,11 +197,10 @@ export default function Dashboard() {
           <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold text-blue-400">🔋 Master Battery</h2>
-              <span className="text-xs px-2.5 py-1 rounded bg-blue-500/10 text-blue-400 font-medium">Hardware BMS</span>
+              <span className="text-xs px-2.5 py-1 rounded bg-blue-500/10 text-blue-400 font-medium">Cap: {MASTER_CAPACITY_AH} Ah</span>
             </div>
 
             <div className="flex items-center gap-6">
-              {/* Battery Icon Bar (Vertical) */}
               <div className="relative w-16 h-28 border-4 border-slate-700 rounded-xl bg-slate-800 p-1 flex flex-col-reverse overflow-hidden shadow-inner">
                 <div
                   className="w-full bg-blue-500 rounded-lg transition-all duration-500 ease-out"
@@ -198,8 +214,13 @@ export default function Dashboard() {
                 <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-8 h-2 bg-slate-700 rounded-t-md"></div>
               </div>
 
-              {/* Detail Teks di samping bar */}
               <div className="flex-1 space-y-2.5 font-mono">
+                <div className="grid grid-cols-2 gap-1 items-center">
+                  <p className="text-slate-400 text-sm">Sisa Ah:</p>
+                  <p className="text-blue-400 font-bold text-sm text-right">
+                    {master.ah !== undefined ? `${master.ah.toFixed(1)} Ah` : "--"}
+                  </p>
+                </div>
                 <div className="grid grid-cols-2 gap-1">
                   <p className="text-slate-400 text-sm">Volt:</p>
                   <p className="text-white font-bold text-sm text-right">{master.voltage ?? "--"} V</p>
@@ -226,7 +247,7 @@ export default function Dashboard() {
           <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold text-purple-400">🔋 Slave Battery</h2>
-              <span className="text-xs px-2.5 py-1 rounded bg-purple-500/10 text-purple-400 font-medium">Virtual Ah</span>
+              <span className="text-xs px-2.5 py-1 rounded bg-purple-500/10 text-purple-400 font-medium">Cap: {SLAVE_CAPACITY_AH} Ah</span>
             </div>
 
             <div className="flex items-center gap-6">
@@ -244,6 +265,12 @@ export default function Dashboard() {
               </div>
 
               <div className="flex-1 space-y-2.5 font-mono">
+                <div className="grid grid-cols-2 gap-1 items-center">
+                  <p className="text-slate-400 text-sm">Sisa Ah:</p>
+                  <p className="text-purple-400 font-bold text-sm text-right">
+                    {slave.ah !== undefined ? `${slave.ah.toFixed(1)} Ah` : "--"}
+                  </p>
+                </div>
                 <div className="grid grid-cols-2 gap-1">
                   <p className="text-slate-400 text-sm">Volt:</p>
                   <p className="text-white font-bold text-sm text-right">{slave.voltage ?? "--"} V</p>
@@ -261,17 +288,17 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="mt-4 pt-3 border-t border-slate-800/70 text-xs text-slate-500 text-center">
-              <span>SOC Calculation: Ah Counting w/ Master Weighting</span>
+              <span>Virtual Ah Calculation (Energy-to-Ah Integration)</span>
             </div>
           </div>
 
         </div>
 
-        {/* Charts Section */}
+        {/* Charts Section (SOC, PV Production, Load Consumption) */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* SOC Chart */}
           <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
-            <h2 className="text-base font-semibold text-slate-200 mb-4">📈 Grafik Perbandingan SOC</h2>
+            <h2 className="text-base font-semibold text-slate-200 mb-4">📈 Grafik Perbandingan SOC (Full Day)</h2>
             <div className="h-64 w-full">
               <ChartComponent data={chartData} yMin={0} yMax={100} />
             </div>
@@ -283,6 +310,14 @@ export default function Dashboard() {
             <div className="h-64 w-full">
               <ChartComponent data={pvChartData} />
             </div>
+          </div>
+        </div>
+
+        {/* Load Consumption Chart (Full Span) */}
+        <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
+          <h2 className="text-base font-semibold text-sky-400 mb-4">🏠 Grafik Load Consumption (W) - Full Day</h2>
+          <div className="h-64 w-full">
+            <ChartComponent data={loadChartData} />
           </div>
         </div>
 
@@ -305,7 +340,7 @@ function ChartComponent({ data, yMin, yMax }: { data: any; yMin?: number; yMax?:
       },
       x: {
         grid: { display: false },
-        ticks: { color: '#94a3b8' }
+        ticks: { color: '#94a3b8', maxTicksLimit: 12 } // Batasi jumlah label di sumbu X biar gak numpuk
       }
     },
     plugins: {
