@@ -4,7 +4,17 @@ import { getFirestore } from 'firebase-admin/firestore';
 
 // Inisialisasi Firebase Admin aman dari multiple instances di Next.js
 if (getApps().length === 0) {
-    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY || '{}');
+    
+    const raw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+    if (!raw) throw new Error("FIREBASE_SERVICE_ACCOUNT_KEY not found");
+
+    const serviceAccount = JSON.parse(raw);
+
+    // Fix line break issue
+    if (serviceAccount.private_key) {
+        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+    }
+
     initializeApp({
         credential: cert(serviceAccount)
     });

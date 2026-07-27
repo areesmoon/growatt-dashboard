@@ -16,6 +16,7 @@ if (getApps().length === 0) {
     if (serviceAccount.private_key) {
         serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
     }
+    
     initializeApp({
         credential: cert(serviceAccount)
     });
