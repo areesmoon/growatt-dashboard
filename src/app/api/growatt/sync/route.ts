@@ -270,7 +270,7 @@ export async function GET(request: NextRequest) {
         const slavePower = slaveVoltage * slaveCurrent;
 
         // 14. Menyusun struktur payload dengan Map 'calibration' yang bersih dan fungsional
-        const currentTimestamp = new Date(currentTimestampStr).toISOString();
+        const currentTimestamp = currentTimestampStr;
 
         const firestorePayload = {
             timestamp: currentTimestamp,
