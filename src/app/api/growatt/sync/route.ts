@@ -30,6 +30,7 @@ const password = process.env.GROWATT_PASSWORD;
 const MASTER_CAPACITY_AH = parseFloat(process.env.MASTER_CAPACITY_AH || '100');
 const SLAVE_CAPACITY_AH = parseFloat(process.env.SLAVE_CAPACITY_AH || '100');
 const INV_STANDBY_THRESHOLD = parseFloat(process.env.INV_STANDBY_THRESHOLD_AMP || '-0.4');
+const PV_POWER_MIN = parseFloat(process.env.PV_POWER_MIN || '5');
 const FIRESTORE_COLLECTION = process.env.FIRESTORE_COLLECTION || 'bms_logs';
 
 const INTERVAL_MINUTES = parseInt(process.env.INTERVAL_MINUTES || '5', 10);
@@ -400,8 +401,8 @@ export async function GET(request: NextRequest) {
         // -------------------------------------------------------------
         // 🚨 WHATSAPP ALERT: Deteksi Status Produksi Panel Surya (PPV)
         // -------------------------------------------------------------
-        const isSolarProducingNow = totalPpv > 0;
-        const isSolarProducingBefore = lastTotalPpv > 0;
+        const isSolarProducingNow = totalPpv >= PV_POWER_MIN;
+        const isSolarProducingBefore = lastTotalPpv >= PV_POWER_MIN;
 
         if (isSolarProducingBefore !== isSolarProducingNow) {
             let solarAlertMessage = "";
