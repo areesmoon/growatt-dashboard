@@ -16,7 +16,7 @@ if (getApps().length === 0) {
     if (serviceAccount.private_key) {
         serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
     }
-    
+
     initializeApp({
         credential: cert(serviceAccount)
     });
@@ -77,7 +77,7 @@ export async function GET(request: NextRequest) {
         // 4. Menarik data plant dengan opsi totalData: true untuk statistik energi kumulatif (kWh)
         let plantData = await growatt.getAllPlantData({
             plantData: false,
-            deviceData: false,
+            deviceData: true,
             weather: false,
             totalData: true,
             statusData: true,
@@ -92,6 +92,7 @@ export async function GET(request: NextRequest) {
         const statusData = deviceNode.statusData || {};
         const historyLast = deviceNode.historyLast || {};
         const totalData = deviceNode.totalData || {};
+        const deviceData = deviceNode.deviceData || {};
 
         // 6.1. gridPower
         const gridPower = parseFloat(statusData.gridPower || '0');
@@ -128,7 +129,17 @@ export async function GET(request: NextRequest) {
         const currentMasterAh = parseFloat(((masterSoc / 100) * MASTER_CAPACITY_AH).toFixed(2));
 
         // 9. Menarik log snapshot terakhir dari Firestore
-        const currentTimestampStr = historyLast.calendar || new Date().toISOString();
+        const rawUpdateTime = deviceNode.deviceData?.lastUpdateTime || '';
+
+        let currentTimestampStr = '';
+        if (rawUpdateTime) {
+            // Ubah spasi jadi 'T' lalu tempel '+07:00' di belakangnya secara sah
+            // Hasilnya jadi: "2026-07-27T17:27:40+07:00"
+            currentTimestampStr = rawUpdateTime.replace(' ', 'T') + '+07:00';
+        } else {
+            // Fallback kalau kosong
+            currentTimestampStr = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Jakarta' }).replace(' ', 'T') + '+07:00';
+        }
 
         const lastSnapshot = await db.collection(FIRESTORE_COLLECTION)
             .orderBy('timestamp', 'desc')
