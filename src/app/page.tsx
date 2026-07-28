@@ -415,6 +415,7 @@ export default function Dashboard() {
                 <p className="text-[10px] text-slate-500 mt-1">Disimpan aman otomatis di local storage browser.</p>
               </div>
 
+              {/*
               <div>
                 <label className="block text-blue-400 text-xs mb-1">Target Master Ah (Opsional)</label>
                 <input 
@@ -426,6 +427,7 @@ export default function Dashboard() {
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
                 />
               </div>
+              */}
 
               <div>
                 <label className="block text-purple-400 text-xs mb-1">Target Slave Ah (Opsional)</label>
