@@ -32,9 +32,24 @@ export default function Dashboard() {
   const [loadChartData, setLoadChartData] = useState<any>({ labels: [], datasets: [] });
   const [loading, setLoading] = useState(true);
 
+  // State untuk Modal Kalibrasi
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [apiSecret, setApiSecret] = useState("");
+  const [masterTargetAh, setMasterTargetAh] = useState("");
+  const [slaveTargetAh, setSlaveTargetAh] = useState("");
+  const [correcting, setCorrecting] = useState(false);
+  const [correctMessage, setCorrectMessage] = useState("");
+
+  // Load API_SECRET dari localStorage saat pertama kali buka
+  useEffect(() => {
+    const savedSecret = localStorage.getItem("bms_api_secret");
+    if (savedSecret) {
+      setApiSecret(savedSecret);
+    }
+  }, []);
+
   const fetchData = async () => {
     try {
-      // Tarik limit 300 data untuk mencakup data penuh seharian (00:00 - selesai)
       const q = query(collection(db, FIRESTORE_COLLECTION), orderBy("timestamp", "desc"), limit(300));
       const querySnapshot = await getDocs(q);
 
@@ -44,9 +59,8 @@ export default function Dashboard() {
       });
 
       if (docs.length > 0) {
-        setData(docs[0]); // Ambil data paling baru untuk card atas
+        setData(docs[0]);
 
-        // Urutkan kronologis untuk chart (dari yang paling lama ke yang terbaru hari ini)
         const reversed = [...docs].reverse();
         const labels = reversed.map(d => new Date(d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
 
@@ -114,9 +128,51 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 30000); // Auto-refresh tiap 30 detik
+    const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  // Handler untuk Trigger API Correct
+  const handleCorrectionSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCorrecting(true);
+    setCorrectMessage("");
+
+    // Simpan API Secret ke localStorage untuk penggunaan selanjutnya
+    localStorage.setItem("bms_api_secret", apiSecret);
+
+    try {
+      const response = await fetch('/api/growatt/correct', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiSecret}`
+        },
+        body: JSON.stringify({
+          masterAh: masterTargetAh ? parseFloat(masterTargetAh) : undefined,
+          slaveAh: slaveTargetAh ? parseFloat(slaveTargetAh) : undefined,
+        })
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        setCorrectMessage("✅ Kalibrasi Ah berhasil dikirim!");
+        setTimeout(() => {
+          setIsModalOpen(false);
+          setCorrectMessage("");
+          fetchData(); // Refresh data dashboard
+        }, 1500);
+      } else {
+        setCorrectMessage(`❌ Gagal: ${result.error || 'Unauthorized / Error sistem'}`);
+      }
+    } catch (err) {
+      console.error("Error API Correct:", err);
+      setCorrectMessage("❌ Terjadi kesalahan jaringan.");
+    } finally {
+      setCorrecting(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -138,13 +194,24 @@ export default function Dashboard() {
       <div className="max-w-6xl mx-auto space-y-6">
 
         {/* Header */}
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-slate-800 pb-4">
+        <header className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-slate-800 pb-4 gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-emerald-400">⚡ {data?.plantName || "BMS Monitor"}</h1>
             <p className="text-xs text-slate-400 font-mono">Device SN: {data?.deviceSn || "-"} | Collection: <span className="text-emerald-400">{FIRESTORE_COLLECTION}</span></p>
           </div>
-          <div className="text-xs bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-full text-slate-300 mt-2 md:mt-0 font-mono">
-            🕒 Update: {data?.timestamp ? new Date(data.timestamp).toLocaleTimeString() : "-"}
+          
+          <div className="flex items-center gap-3">
+            <div className="text-xs bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-full text-slate-300 font-mono">
+              🕒 Update: {data?.timestamp ? new Date(data.timestamp).toLocaleTimeString() : "-"}
+            </div>
+            
+            {/* Tombol Buka Modal Kalibrasi */}
+            <button
+              onClick={() => setIsModalOpen(true)}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-mono font-semibold px-3.5 py-2 rounded-lg shadow transition flex items-center gap-1.5"
+            >
+              <span>⚙️</span> Kalibrasi Ah
+            </button>
           </div>
         </header>
 
@@ -294,9 +361,8 @@ export default function Dashboard() {
 
         </div>
 
-        {/* Charts Section (SOC, PV Production, Load Consumption) */}
+        {/* Charts Section */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* SOC Chart */}
           <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
             <h2 className="text-base font-semibold text-slate-200 mb-4">📈 Grafik Perbandingan SOC (Full Day)</h2>
             <div className="h-64 w-full">
@@ -304,7 +370,6 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* PV Production Chart */}
           <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
             <h2 className="text-base font-semibold text-amber-400 mb-4">☀️ Grafik PV Production (W)</h2>
             <div className="h-64 w-full">
@@ -313,7 +378,6 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Load Consumption Chart (Full Span) */}
         <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
           <h2 className="text-base font-semibold text-sky-400 mb-4">🏠 Grafik Load Consumption (W) - Full Day</h2>
           <div className="h-64 w-full">
@@ -322,11 +386,89 @@ export default function Dashboard() {
         </div>
 
       </div>
+
+      {/* POPUP MODAL KALIBRASI AH */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <h3 className="text-lg font-bold text-emerald-400">⚙️ Kalibrasi Nilai Ah Baterai</h3>
+              <button 
+                onClick={() => setIsModalOpen(false)}
+                className="text-slate-400 hover:text-white text-sm font-mono px-2 py-1 rounded"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCorrectionSubmit} className="space-y-4 font-mono text-sm">
+              <div>
+                <label className="block text-slate-300 text-xs mb-1">API_SECRET (Bearer Token)</label>
+                <input 
+                  type="password"
+                  value={apiSecret}
+                  onChange={(e) => setApiSecret(e.target.value)}
+                  placeholder="Masukkan API Secret..."
+                  required
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-emerald-500"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">Disimpan aman otomatis di local storage browser.</p>
+              </div>
+
+              <div>
+                <label className="block text-blue-400 text-xs mb-1">Target Master Ah (Opsional)</label>
+                <input 
+                  type="number"
+                  step="0.1"
+                  value={masterTargetAh}
+                  onChange={(e) => setMasterTargetAh(e.target.value)}
+                  placeholder={`Current: ${master.ah !== undefined ? master.ah.toFixed(1) : '0'}`}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-purple-400 text-xs mb-1">Target Slave Ah (Opsional)</label>
+                <input 
+                  type="number"
+                  step="0.1"
+                  value={slaveTargetAh}
+                  onChange={(e) => setSlaveTargetAh(e.target.value)}
+                  placeholder={`Current: ${slave.ah !== undefined ? slave.ah.toFixed(1) : '0'}`}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-purple-500"
+                />
+              </div>
+
+              {correctMessage && (
+                <div className={`p-2.5 rounded-lg text-xs font-mono text-center ${correctMessage.includes('✅') ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+                  {correctMessage}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={correcting}
+                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold disabled:opacity-50"
+                >
+                  {correcting ? "Mengirim..." : "Kirim Koreksi"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
 
-// Komponen pembantu untuk Chart agar aman dari SSR hydration error di Next.js
 function ChartComponent({ data, yMin, yMax }: { data: any; yMin?: number; yMax?: number }) {
   const options = {
     responsive: true,
@@ -340,7 +482,7 @@ function ChartComponent({ data, yMin, yMax }: { data: any; yMin?: number; yMax?:
       },
       x: {
         grid: { display: false },
-        ticks: { color: '#94a3b8', maxTicksLimit: 12 } // Batasi jumlah label di sumbu X biar gak numpuk
+        ticks: { color: '#94a3b8', maxTicksLimit: 12 }
       }
     },
     plugins: {

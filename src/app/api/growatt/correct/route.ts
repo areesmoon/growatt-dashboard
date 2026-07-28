@@ -4,7 +4,6 @@ import { getFirestore } from 'firebase-admin/firestore';
 
 // Inisialisasi Firebase Admin aman dari multiple instances di Next.js
 if (getApps().length === 0) {
-    
     const raw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
     if (!raw) throw new Error("FIREBASE_SERVICE_ACCOUNT_KEY not found");
 
@@ -23,29 +22,31 @@ if (getApps().length === 0) {
 const db = getFirestore();
 
 const FIRESTORE_COLLECTION = process.env.FIRESTORE_COLLECTION || 'bms_logs';
-const SLAVE_CAPACITY_AH = parseFloat(process.env.SLAVE_CAPACITY_AH || '100');
+const MASTER_CAPACITY_AH = parseFloat(process.env.NEXT_PUBLIC_MASTER_CAPACITY_AH || process.env.MASTER_CAPACITY_AH || '200');
+const SLAVE_CAPACITY_AH = parseFloat(process.env.NEXT_PUBLIC_SLAVE_CAPACITY_AH || process.env.SLAVE_CAPACITY_AH || '100');
 
-export async function GET(request: NextRequest) {
+export async function POST(request: NextRequest) {
     try {
-        // 1. Keamanan Token Header / Query Secret dari browser / cron-job
+        // 1. Keamanan Token Header / Secret Key dari request
         const authHeader = request.headers.get('authorization');
-        const urlParams = request.nextUrl.searchParams;
-        const querySecret = urlParams.get('secret');
-        
         const bearerToken = authHeader ? authHeader.replace('Bearer ', '') : null;
-        const isAuthorized = (process.env.CRON_SECRET && (bearerToken === process.env.CRON_SECRET || querySecret === process.env.CRON_SECRET));
+        
+        // Cek secret dari API_SECRET atau fallback ke CRON_SECRET
+        const validSecret = process.env.API_SECRET || process.env.CRON_SECRET;
+        const isAuthorized = validSecret ? (bearerToken === validSecret) : true;
 
-        if (process.env.CRON_SECRET && !isAuthorized) {
-            return NextResponse.json({ error: 'Unauthorized: Secret key salah atau tidak ada.' }, { status: 401 });
+        if (validSecret && !isAuthorized) {
+            return NextResponse.json({ success: false, error: 'Unauthorized: API Secret salah atau tidak ada.' }, { status: 401 });
         }
 
-        // 2. Ambil parameter target_ah dari URL Query (Contoh: /api/growatt/correct?target_ah=100&secret=xxx)
-        const targetAhParam = urlParams.get('target_ah');
-        const targetSlaveAh = targetAhParam ? parseFloat(targetAhParam) : NaN;
+        // 2. Ambil payload body JSON dari frontend dashboard
+        const body = await request.json().catch(() => ({}));
+        const targetMasterAh = body.masterAh !== undefined ? parseFloat(body.masterAh) : NaN;
+        const targetSlaveAh = body.slaveAh !== undefined ? parseFloat(body.slaveAh) : NaN;
 
-        if (isNaN(targetSlaveAh)) {
+        if (isNaN(targetMasterAh) && isNaN(targetSlaveAh)) {
             return NextResponse.json(
-                { success: false, error: "Parameter target_ah wajib diisi dengan format angka yang valid! (Contoh: ?target_ah=100&secret=KODE_RAHASIA)" },
+                { success: false, error: "Minimal salah satu (masterAh atau slaveAh) wajib diisi dengan format angka yang valid!" },
                 { status: 400 }
             );
         }
@@ -66,69 +67,79 @@ export async function GET(request: NextRequest) {
         const lastId = lastDoc.id;
 
         console.log(`📄 Dokumen Terakhir [ID: ${lastId}] : ${lastData.timestamp}`);
-        console.log(`   └─ Master SOC: ${lastData.master?.soc}% | Current Slave Ah: ${lastData.slave?.ah}Ah`);
 
-        // 4. Ambil parameter calibration saat ini
-        const calib = lastData.calibration || {};
-        const oldChargeFactor = parseFloat(calib.chargeCorrectionFactor || '1.0');
-        const oldDischargeFactor = parseFloat(calib.dischargeCorrectionFactor || '1.0');
-        const totalCount = parseInt(calib.totalCount || '1', 10);
+        let updates: Record<string, any> = {};
+        let responsePayload: Record<string, any> = { success: true, updatedDocId: lastId };
 
-        console.log(`📊 Statistik Kalibrasi Aktif: Total Data Count = ${totalCount}`);
-        console.log(`   - Old Charge Factor    : ${oldChargeFactor}`);
-        console.log(`   - Old Discharge Factor : ${oldDischargeFactor}`);
+        // --- PROSES KALIBRASI MASTER ---
+        if (!isNaN(targetMasterAh)) {
+            const clampedMasterAh = Math.min(MASTER_CAPACITY_AH, Math.max(0, targetMasterAh));
+            const oldMasterAh = parseFloat(lastData.master?.ah || '0');
+            const masterCalib = lastData.master?.calibration || lastData.calibration || {};
+            const oldChargeFactor = parseFloat(masterCalib.chargeCorrectionFactor || '1.0');
+            const oldDischargeFactor = parseFloat(masterCalib.dischargeCorrectionFactor || '1.0');
 
-        // 5. Batasi target slave Ah sesuai kapasitas nominal
-        const clampedTargetSlaveAh = Math.min(SLAVE_CAPACITY_AH, Math.max(0, targetSlaveAh));
-        const currentSlaveAh = parseFloat(lastData.slave?.ah || '0');
-        const ahDiff = clampedTargetSlaveAh - currentSlaveAh;
+            let adjustmentRatio = oldMasterAh > 0 ? (clampedMasterAh / oldMasterAh) : 1.0;
+            const newChargeFactor = oldChargeFactor * adjustmentRatio;
+            const newDischargeFactor = oldDischargeFactor * adjustmentRatio;
+            const learningRate = 0.15;
 
-        console.log(`⚖️ Target Slave Ah: ${clampedTargetSlaveAh}Ah | Aktual di DB: ${currentSlaveAh}Ah | Selisih (Error): ${ahDiff.toFixed(2)}Ah`);
+            const finalChargeFactor = (oldChargeFactor * (1 - learningRate)) + (newChargeFactor * learningRate);
+            const finalDischargeFactor = (oldDischargeFactor * (1 - learningRate)) + (newDischargeFactor * learningRate);
+            const newMasterSoc = parseFloat(((clampedMasterAh / MASTER_CAPACITY_AH) * 100).toFixed(2));
 
-        // 6. Hitung indikasi koreksi rasio baru
-        let adjustmentRatio = 1.0;
-        if (currentSlaveAh > 0) {
-            adjustmentRatio = clampedTargetSlaveAh / currentSlaveAh;
+            updates["master.ah"] = clampedMasterAh;
+            updates["master.soc"] = newMasterSoc;
+            updates["master.calibration.chargeCorrectionFactor"] = parseFloat(finalChargeFactor.toFixed(4));
+            updates["master.calibration.dischargeCorrectionFactor"] = parseFloat(finalDischargeFactor.toFixed(4));
+            updates["master.calibration.totalCount"] = 1;
+
+            responsePayload.master = {
+                targetAh: clampedMasterAh,
+                newSoc: newMasterSoc,
+                newChargeFactor: parseFloat(finalChargeFactor.toFixed(4)),
+                newDischargeFactor: parseFloat(finalDischargeFactor.toFixed(4))
+            };
+            console.log(`🔋 Master Calibrated: ${clampedMasterAh}Ah (${newMasterSoc}%)`);
         }
 
-        let calculatedChargeFactor = oldChargeFactor * adjustmentRatio;
-        let calculatedDischargeFactor = oldDischargeFactor * adjustmentRatio;
+        // --- PROSES KALIBRASI SLAVE ---
+        if (!isNaN(targetSlaveAh)) {
+            const clampedSlaveAh = Math.min(SLAVE_CAPACITY_AH, Math.max(0, targetSlaveAh));
+            const oldSlaveAh = parseFloat(lastData.slave?.ah || '0');
+            const slaveCalib = lastData.slave?.calibration || lastData.calibration || {};
+            const oldChargeFactor = parseFloat(slaveCalib.chargeCorrectionFactor || '1.0');
+            const oldDischargeFactor = parseFloat(slaveCalib.dischargeCorrectionFactor || '1.0');
 
-        // 7. PENERAPAN PERGESERAN LANDAI (SMOOTH SHIFT / DAMPING)
-        const learningRate = 0.15; 
+            let adjustmentRatio = oldSlaveAh > 0 ? (clampedSlaveAh / oldSlaveAh) : 1.0;
+            const newChargeFactor = oldChargeFactor * adjustmentRatio;
+            const newDischargeFactor = oldDischargeFactor * adjustmentRatio;
+            const learningRate = 0.15;
 
-        const newChargeFactor = (oldChargeFactor * (1 - learningRate)) + (calculatedChargeFactor * learningRate);
-        const newDischargeFactor = (oldDischargeFactor * (1 - learningRate)) + (calculatedDischargeFactor * learningRate);
+            const finalChargeFactor = (oldChargeFactor * (1 - learningRate)) + (newChargeFactor * learningRate);
+            const finalDischargeFactor = (oldDischargeFactor * (1 - learningRate)) + (newDischargeFactor * learningRate);
+            const newSlaveSoc = parseFloat(((clampedSlaveAh / SLAVE_CAPACITY_AH) * 100).toFixed(2));
 
-        const newSoc = parseFloat(((clampedTargetSlaveAh / SLAVE_CAPACITY_AH) * 100).toFixed(2));
+            updates["slave.ah"] = clampedSlaveAh;
+            updates["slave.soc"] = newSlaveSoc;
+            updates["slave.calibration.chargeCorrectionFactor"] = parseFloat(finalChargeFactor.toFixed(4));
+            updates["slave.calibration.dischargeCorrectionFactor"] = parseFloat(finalDischargeFactor.toFixed(4));
+            updates["slave.calibration.totalCount"] = 1;
 
-        console.log(`\n--- HASIL KALIBRASI ADAPTIF ---`);
-        console.log(`   👉 NEW Charge Factor    : ${newChargeFactor.toFixed(4)} (Geser dari ${oldChargeFactor})`);
-        console.log(`   👉 NEW Discharge Factor : ${newDischargeFactor.toFixed(4)} (Geser dari ${oldDischargeFactor})`);
-        console.log(`   👉 New Slave Ah & SOC   : ${clampedTargetSlaveAh}Ah (${newSoc}%)`);
+            responsePayload.slave = {
+                targetAh: clampedSlaveAh,
+                newSoc: newSlaveSoc,
+                newChargeFactor: parseFloat(finalChargeFactor.toFixed(4)),
+                newDischargeFactor: parseFloat(finalDischargeFactor.toFixed(4))
+            };
+            console.log(`🔋 Slave Calibrated: ${clampedSlaveAh}Ah (${newSlaveSoc}%)`);
+        }
 
-        // 8. Update dokumen terakhir di Firestore
-        let updates = {
-            "slave.ah": clampedTargetSlaveAh,
-            "slave.soc": newSoc,
-            "calibration.chargeCorrectionFactor": parseFloat(newChargeFactor.toFixed(4)),
-            "calibration.dischargeCorrectionFactor": parseFloat(newDischargeFactor.toFixed(4)),
-            "calibration.totalCount": 1 // Reset counter untuk memulai siklus pembelajaran baru
-        };
-
+        // 4. Eksekusi update dokumen terakhir di Firestore
         await collectionRef.doc(lastId).update(updates);
 
-        console.log(`\n✅ Berhasil update database [ID: ${lastId}]!`);
-
-        return NextResponse.json({
-            success: true,
-            message: "Berhasil melakukan kalibrasi adaptif via GET",
-            updatedDocId: lastId,
-            targetSlaveAh: clampedTargetSlaveAh,
-            newSoc,
-            newChargeFactor: parseFloat(newChargeFactor.toFixed(4)),
-            newDischargeFactor: parseFloat(newDischargeFactor.toFixed(4))
-        });
+        console.log(`\n✅ Berhasil update database [ID: ${lastId}] via POST!`);
+        return NextResponse.json(responsePayload);
 
     } catch (error: any) {
         console.error("❌ Gagal menjalankan koreksi adaptif:", error.message);
