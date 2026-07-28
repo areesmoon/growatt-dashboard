@@ -254,20 +254,22 @@ export async function GET(request: NextRequest) {
 
                 // --- AUTO-CORRECT OTOMATIS (NATIVE TS) ---
                 if (lastSlaveAh < SLAVE_CAPACITY_AH && calculatedSlaveAh >= SLAVE_CAPACITY_AH) {
-                    console.log(`\n🚨 [AUTO-CORRECT TRIGGER] Slave tembus batas penuh. Menjalankan penyesuaian adaptif otomatis...`);
+                    console.log(`\n🚨 [AUTO-CORRECT TRIGGER] Slave tembus batas penuh (100%). Menjalankan penyesuaian adaptif charge factor otomatis...`);
 
                     const clampedTargetSlaveAh = SLAVE_CAPACITY_AH;
                     let adjustmentRatio = lastSlaveAh > 0 ? (clampedTargetSlaveAh / lastSlaveAh) : 1.0;
+
+                    // Hitung hanya untuk charge factor
                     let calculatedChargeFactor = chargeCorrectionFactor * adjustmentRatio;
-                    let calculatedDischargeFactor = dischargeCorrectionFactor * adjustmentRatio;
-
                     const learningRate = 0.15;
-                    chargeCorrectionFactor = (chargeCorrectionFactor * (1 - learningRate)) + (calculatedChargeFactor * learningRate);
-                    dischargeCorrectionFactor = (dischargeCorrectionFactor * (1 - learningRate)) + (calculatedDischargeFactor * learningRate);
-                    totalCount = 1;
 
+                    chargeCorrectionFactor = (chargeCorrectionFactor * (1 - learningRate)) + (calculatedChargeFactor * learningRate);
+                    // dischargeCorrectionFactor DIBIARKAN UTUH karena ini momennya sedang charging/penuh!
+
+                    totalCount = 1;
                     calculatedSlaveAh = SLAVE_CAPACITY_AH;
-                    console.log(`✅ [AUTO-CORRECT SUCCESS] Faktor koreksi diperbarui & counter direset.`);
+
+                    console.log(`✅ [AUTO-CORRECT SUCCESS] Charge Correction Factor diperbarui ke ${chargeCorrectionFactor.toFixed(4)} & counter direset.`);
                 }
 
                 slaveAh = parseFloat(Math.min(SLAVE_CAPACITY_AH, Math.max(0, calculatedSlaveAh)).toFixed(2));

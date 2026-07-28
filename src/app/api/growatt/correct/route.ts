@@ -70,6 +70,7 @@ export async function POST(request: NextRequest) {
 
         let updates: Record<string, any> = {};
         let responsePayload: Record<string, any> = { success: true, updatedDocId: lastId };
+        const learningRate = 0.15;
 
         // --- PROSES KALIBRASI MASTER ---
         if (!isNaN(targetMasterAh)) {
@@ -79,28 +80,44 @@ export async function POST(request: NextRequest) {
             const oldChargeFactor = parseFloat(masterCalib.chargeCorrectionFactor || '1.0');
             const oldDischargeFactor = parseFloat(masterCalib.dischargeCorrectionFactor || '1.0');
 
-            let adjustmentRatio = oldMasterAh > 0 ? (clampedMasterAh / oldMasterAh) : 1.0;
-            const newChargeFactor = oldChargeFactor * adjustmentRatio;
-            const newDischargeFactor = oldDischargeFactor * adjustmentRatio;
-            const learningRate = 0.15;
+            // Cek status arus/daya master (positif = charging, negatif/nol = discharging)
+            const masterCurrent = parseFloat(lastData.master?.current ?? lastData.master?.power ?? 0);
+            const isMasterCharging = masterCurrent > 0;
 
-            const finalChargeFactor = (oldChargeFactor * (1 - learningRate)) + (newChargeFactor * learningRate);
-            const finalDischargeFactor = (oldDischargeFactor * (1 - learningRate)) + (newDischargeFactor * learningRate);
+            let adjustmentRatio = oldMasterAh > 0 ? (clampedMasterAh / oldMasterAh) : 1.0;
             const newMasterSoc = parseFloat(((clampedMasterAh / MASTER_CAPACITY_AH) * 100).toFixed(2));
 
             updates["master.ah"] = clampedMasterAh;
             updates["master.soc"] = newMasterSoc;
-            updates["master.calibration.chargeCorrectionFactor"] = parseFloat(finalChargeFactor.toFixed(4));
-            updates["master.calibration.dischargeCorrectionFactor"] = parseFloat(finalDischargeFactor.toFixed(4));
-            updates["master.calibration.totalCount"] = 1;
-
             responsePayload.master = {
                 targetAh: clampedMasterAh,
                 newSoc: newMasterSoc,
-                newChargeFactor: parseFloat(finalChargeFactor.toFixed(4)),
-                newDischargeFactor: parseFloat(finalDischargeFactor.toFixed(4))
+                status: isMasterCharging ? "CHARGING" : "DISCHARGING"
             };
-            console.log(`🔋 Master Calibrated: ${clampedMasterAh}Ah (${newMasterSoc}%)`);
+
+            if (isMasterCharging) {
+                // Hanya ubah chargeCorrectionFactor
+                const rawNewChargeFactor = oldChargeFactor * adjustmentRatio;
+                const finalChargeFactor = (oldChargeFactor * (1 - learningRate)) + (rawNewChargeFactor * learningRate);
+
+                updates["master.calibration.chargeCorrectionFactor"] = parseFloat(finalChargeFactor.toFixed(4));
+                updates["master.calibration.totalCount"] = 1;
+
+                responsePayload.master.adjustedFactorType = "chargeCorrectionFactor";
+                responsePayload.master.newChargeFactor = parseFloat(finalChargeFactor.toFixed(4));
+                console.log(`🔋 Master Calibrated (Charging): Target ${clampedMasterAh}Ah | New Charge Factor: ${finalChargeFactor.toFixed(4)}`);
+            } else {
+                // Hanya ubah dischargeCorrectionFactor
+                const rawNewDischargeFactor = oldDischargeFactor * adjustmentRatio;
+                const finalDischargeFactor = (oldDischargeFactor * (1 - learningRate)) + (rawNewDischargeFactor * learningRate);
+
+                updates["master.calibration.dischargeCorrectionFactor"] = parseFloat(finalDischargeFactor.toFixed(4));
+                updates["master.calibration.totalCount"] = 1;
+
+                responsePayload.master.adjustedFactorType = "dischargeCorrectionFactor";
+                responsePayload.master.newDischargeFactor = parseFloat(finalDischargeFactor.toFixed(4));
+                console.log(`🔋 Master Calibrated (Discharging): Target ${clampedMasterAh}Ah | New Discharge Factor: ${finalDischargeFactor.toFixed(4)}`);
+            }
         }
 
         // --- PROSES KALIBRASI SLAVE ---
@@ -111,34 +128,50 @@ export async function POST(request: NextRequest) {
             const oldChargeFactor = parseFloat(slaveCalib.chargeCorrectionFactor || '1.0');
             const oldDischargeFactor = parseFloat(slaveCalib.dischargeCorrectionFactor || '1.0');
 
-            let adjustmentRatio = oldSlaveAh > 0 ? (clampedSlaveAh / oldSlaveAh) : 1.0;
-            const newChargeFactor = oldChargeFactor * adjustmentRatio;
-            const newDischargeFactor = oldDischargeFactor * adjustmentRatio;
-            const learningRate = 0.15;
+            // Cek status arus/daya slave (positif = charging, negatif/nol = discharging)
+            const slaveCurrent = parseFloat(lastData.slave?.current ?? lastData.slave?.power ?? 0);
+            const isSlaveCharging = slaveCurrent > 0;
 
-            const finalChargeFactor = (oldChargeFactor * (1 - learningRate)) + (newChargeFactor * learningRate);
-            const finalDischargeFactor = (oldDischargeFactor * (1 - learningRate)) + (newDischargeFactor * learningRate);
+            let adjustmentRatio = oldSlaveAh > 0 ? (clampedSlaveAh / oldSlaveAh) : 1.0;
             const newSlaveSoc = parseFloat(((clampedSlaveAh / SLAVE_CAPACITY_AH) * 100).toFixed(2));
 
             updates["slave.ah"] = clampedSlaveAh;
             updates["slave.soc"] = newSlaveSoc;
-            updates["slave.calibration.chargeCorrectionFactor"] = parseFloat(finalChargeFactor.toFixed(4));
-            updates["slave.calibration.dischargeCorrectionFactor"] = parseFloat(finalDischargeFactor.toFixed(4));
-            updates["slave.calibration.totalCount"] = 1;
-
             responsePayload.slave = {
                 targetAh: clampedSlaveAh,
                 newSoc: newSlaveSoc,
-                newChargeFactor: parseFloat(finalChargeFactor.toFixed(4)),
-                newDischargeFactor: parseFloat(finalDischargeFactor.toFixed(4))
+                status: isSlaveCharging ? "CHARGING" : "DISCHARGING"
             };
-            console.log(`🔋 Slave Calibrated: ${clampedSlaveAh}Ah (${newSlaveSoc}%)`);
+
+            if (isSlaveCharging) {
+                // Hanya ubah chargeCorrectionFactor
+                const rawNewChargeFactor = oldChargeFactor * adjustmentRatio;
+                const finalChargeFactor = (oldChargeFactor * (1 - learningRate)) + (rawNewChargeFactor * learningRate);
+
+                updates["slave.calibration.chargeCorrectionFactor"] = parseFloat(finalChargeFactor.toFixed(4));
+                updates["slave.calibration.totalCount"] = 1;
+
+                responsePayload.slave.adjustedFactorType = "chargeCorrectionFactor";
+                responsePayload.slave.newChargeFactor = parseFloat(finalChargeFactor.toFixed(4));
+                console.log(`🔋 Slave Calibrated (Charging): Target ${clampedSlaveAh}Ah | New Charge Factor: ${finalChargeFactor.toFixed(4)}`);
+            } else {
+                // Hanya ubah dischargeCorrectionFactor
+                const rawNewDischargeFactor = oldDischargeFactor * adjustmentRatio;
+                const finalDischargeFactor = (oldDischargeFactor * (1 - learningRate)) + (rawNewDischargeFactor * learningRate);
+
+                updates["slave.calibration.dischargeCorrectionFactor"] = parseFloat(finalDischargeFactor.toFixed(4));
+                updates["slave.calibration.totalCount"] = 1;
+
+                responsePayload.slave.adjustedFactorType = "dischargeCorrectionFactor";
+                responsePayload.slave.newDischargeFactor = parseFloat(finalDischargeFactor.toFixed(4));
+                console.log(`🔋 Slave Calibrated (Discharging): Target ${clampedSlaveAh}Ah | New Discharge Factor: ${finalDischargeFactor.toFixed(4)}`);
+            }
         }
 
         // 4. Eksekusi update dokumen terakhir di Firestore
         await collectionRef.doc(lastId).update(updates);
 
-        console.log(`\n✅ Berhasil update database [ID: ${lastId}] via POST!`);
+        console.log(`\n✅ Berhasil update database [ID: ${lastId}] via POST (Selective Factor Correction)!`);
         return NextResponse.json(responsePayload);
 
     } catch (error: any) {
