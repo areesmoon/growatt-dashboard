@@ -367,6 +367,39 @@ export async function GET(request: NextRequest) {
         const timeWib = formatWibTime(currentTimestamp);
         const waNumber = process.env.WA_TARGET_NUMBER || '';
 
+        // Ambil threshold dari .env, sediakan nilai default cadangan
+        const batToGridThreshold = parseInt(process.env.BAT_TO_GRID_THRESHOLD || '35', 10);
+        const batCriticalThreshold = parseInt(process.env.BAT_CRITICAL_THRESHOLD || '22', 10);
+        const batCriticalAlert = parseInt(process.env.BAT_CRITICAL_ALERT || '20', 10);
+
+        // -------------------------------------------------------------
+        // 🚨 WHATSAPP ALERT 1: Batas Baterai Switch ke Grid/PLN (BAT2GRID)
+        // -------------------------------------------------------------
+        if (lastMasterSoc > batToGridThreshold && masterSoc <= batToGridThreshold) {
+            let bat2GridMessage = `⚡ *SWITCH TO GRID ALERT*\n\nKapasitas baterai PLTS menyentuh *${masterSoc}%* 🔌 Inverter akan switch suplai beban ke jalur PLN.\n🕒 Waktu: ${timeWib}`;
+
+            try {
+                await wa.sendMessage(waNumber, bat2GridMessage);
+                console.log(`📨 Notifikasi WA BAT2GRID (${masterSoc}%) berhasil dikirim!`);
+            } catch (waError: any) {
+                console.error("❌ Gagal kirim notifikasi WA BAT2GRID:", waError.message);
+            }
+        }
+
+        // -------------------------------------------------------------
+        // 🚨 WHATSAPP ALERT 2: Early Warning Baterai Kritis (Mau Habis)
+        // -------------------------------------------------------------
+        if (lastMasterSoc > batCriticalThreshold && masterSoc <= batCriticalThreshold) {
+            let earlyWarningMessage = `🚨 *CRITICAL BATTERY WARNING*\n\nKapasitas baterai PLTS turun ke angka *${masterSoc}%*! (Mendekati batas kritis di ${batCriticalAlert}%).\n⚠️ Inverter akan segera shutdown total jika tidak ada suplai lain. Segera ambil tindakan!\n🕒 Waktu: ${timeWib}`;
+
+            try {
+                await wa.sendMessage(waNumber, earlyWarningMessage);
+                console.log(`📨 Notifikasi WA Baterai Kritis (${masterSoc}%) berhasil dikirim!`);
+            } catch (waError: any) {
+                console.error("❌ Gagal kirim notifikasi WA Baterai Kritis:", waError.message);
+            }
+        }
+
         // -------------------------------------------------------------
         // 🚨 WHATSAPP ALERT: Deteksi Perubahan Suplai Beban (PLTS / PLN)
         // -------------------------------------------------------------
@@ -434,9 +467,9 @@ export async function GET(request: NextRequest) {
             let solarAlertMessage = "";
 
             if (!isSolarProducingNow) {
-                solarAlertMessage = `🌙 *SOLAR PRODUCTION STOPPED*\n\nProduksi panel surya berhenti / habis. Sistem beralih sepenuhnya ke Baterai/PLN.\n🕒 Waktu: ${timeWib}`;
+                solarAlertMessage = `🌙 *SOLAR PRODUCTION STOPPED*\n\nProduksi panel surya berhenti / habis. Sistem beralih sepenuhnya ke Baterai/PLN.\n🔋 Sisa SOC Master: *${masterSoc}%*\n🕒 Waktu: ${timeWib}`;
             } else {
-                solarAlertMessage = `☀️ *SOLAR PRODUCTION STARTED*\n\nPanel surya mulai berproduksi! Daya terdeteksi *${totalPpv}W*.\n🕒 Waktu: ${timeWib}`;
+                solarAlertMessage = `☀️ *SOLAR PRODUCTION STARTED*\n\nPanel surya mulai berproduksi! Daya terdeteksi *${totalPpv}W*.\n🔋 Sisa SOC Master: *${masterSoc}%*\n🕒 Waktu: ${timeWib}`;
             }
 
             try {
@@ -444,39 +477,6 @@ export async function GET(request: NextRequest) {
                 console.log(`📨 Notifikasi WA Status Panel Surya (${isSolarProducingNow ? 'Mulai Produksi' : 'Habis'}) berhasil dikirim!`);
             } catch (waError: any) {
                 console.error("❌ Gagal kirim notifikasi WA Panel Surya:", waError.message);
-            }
-        }
-
-        // Ambil threshold dari .env, sediakan nilai default cadangan
-        const batToGridThreshold = parseInt(process.env.BAT_TO_GRID_THRESHOLD || '35', 10);
-        const batCriticalThreshold = parseInt(process.env.BAT_CRITICAL_THRESHOLD || '22', 10);
-        const batCriticalAlert = parseInt(process.env.BAT_CRITICAL_ALERT || '20', 10);
-
-        // -------------------------------------------------------------
-        // 🚨 WHATSAPP ALERT 1: Batas Baterai Switch ke Grid/PLN (BAT2GRID)
-        // -------------------------------------------------------------
-        if (lastMasterSoc > batToGridThreshold && masterSoc <= batToGridThreshold) {
-            let bat2GridMessage = `⚡ *SWITCH TO GRID ALERT*\n\nKapasitas baterai PLTS menyentuh *${masterSoc}%* 🔌 Inverter akan switch suplai beban ke jalur PLN.\n🕒 Waktu: ${timeWib}`;
-
-            try {
-                await wa.sendMessage(waNumber, bat2GridMessage);
-                console.log(`📨 Notifikasi WA BAT2GRID (${masterSoc}%) berhasil dikirim!`);
-            } catch (waError: any) {
-                console.error("❌ Gagal kirim notifikasi WA BAT2GRID:", waError.message);
-            }
-        }
-
-        // -------------------------------------------------------------
-        // 🚨 WHATSAPP ALERT 2: Early Warning Baterai Kritis (Mau Habis)
-        // -------------------------------------------------------------
-        if (lastMasterSoc > batCriticalThreshold && masterSoc <= batCriticalThreshold) {
-            let earlyWarningMessage = `🚨 *CRITICAL BATTERY WARNING*\n\nKapasitas baterai PLTS turun ke angka *${masterSoc}%*! (Mendekati batas kritis di ${batCriticalAlert}%).\n⚠️ Inverter akan segera shutdown total jika tidak ada suplai lain. Segera ambil tindakan!\n🕒 Waktu: ${timeWib}`;
-
-            try {
-                await wa.sendMessage(waNumber, earlyWarningMessage);
-                console.log(`📨 Notifikasi WA Baterai Kritis (${masterSoc}%) berhasil dikirim!`);
-            } catch (waError: any) {
-                console.error("❌ Gagal kirim notifikasi WA Baterai Kritis:", waError.message);
             }
         }
 
