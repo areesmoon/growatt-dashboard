@@ -354,8 +354,9 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
-            <div className="mt-4 pt-3 border-t border-slate-800/70 text-xs text-slate-500 text-center">
-              <span>Virtual Ah Calculation (Energy-to-Ah Integration)</span>
+            <div className="mt-4 pt-3 border-t border-slate-800/70 text-xs text-slate-500 flex justify-between">
+              <span>SOH: {slave.soh ?? "--"}%</span>
+              <span>Cycles: {slave.cycleCount ?? "--"}</span>
             </div>
           </div>
 
