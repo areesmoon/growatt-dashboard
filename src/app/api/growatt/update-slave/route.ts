@@ -22,16 +22,60 @@ const db = getFirestore();
 
 const FIRESTORE_COLLECTION = process.env.FIRESTORE_COLLECTION || 'bms_logs';
 
+// Helper validasi token keamanan (dipakai bersama oleh GET & POST)
+function checkAuthorization(request: NextRequest) {
+    const authHeader = request.headers.get('authorization');
+    const bearerToken = authHeader ? authHeader.replace('Bearer ', '') : null;
+    
+    const validSecret = process.env.API_SECRET || process.env.CRON_SECRET;
+    const isAuthorized = validSecret ? (bearerToken === validSecret) : true;
+
+    return { isValid: validSecret ? isAuthorized : true };
+}
+
+// ==========================================
+// GET: Dipakai Python untuk ngambil master.current terakhir
+// ==========================================
+export async function GET(request: NextRequest) {
+    try {
+        // 1. Keamanan Token Header
+        const { isValid } = checkAuthorization(request);
+        if (!isValid) {
+            return NextResponse.json({ success: false, error: 'Unauthorized: API Secret salah atau tidak ada.' }, { status: 401 });
+        }
+
+        const collectionRef = db.collection(FIRESTORE_COLLECTION);
+        const lastSnapshot = await collectionRef.orderBy('timestamp', 'desc').limit(1).get();
+        
+        if (lastSnapshot.empty) {
+            return NextResponse.json({ success: false, masterCurrent: 0, error: "Tidak ada data dokumen ditemukan." });
+        }
+
+        const lastDocData = lastSnapshot.docs[0].data();
+        // Ambil nilai master.current dari dokumen inverter terakhir
+        const masterCurrent = lastDocData.master?.current !== undefined ? parseFloat(lastDocData.master.current) : 0;
+
+        console.log(`📥 Python meminta master.current terakhir: ${masterCurrent}A`);
+
+        return NextResponse.json({ 
+            success: true, 
+            masterCurrent: masterCurrent 
+        });
+
+    } catch (error: any) {
+        console.error("❌ Gagal ambil master.current via GET:", error.message);
+        return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    }
+}
+
+// ==========================================
+// POST: Update data slave dari Python (Existing)
+// ==========================================
 export async function POST(request: NextRequest) {
     try {
         // 1. Keamanan Token Header / Secret Key
-        const authHeader = request.headers.get('authorization');
-        const bearerToken = authHeader ? authHeader.replace('Bearer ', '') : null;
-        
-        const validSecret = process.env.API_SECRET || process.env.CRON_SECRET;
-        const isAuthorized = validSecret ? (bearerToken === validSecret) : true;
-
-        if (validSecret && !isAuthorized) {
+        const { isValid } = checkAuthorization(request);
+        if (!isValid) {
             return NextResponse.json({ success: false, error: 'Unauthorized: API Secret salah atau tidak ada.' }, { status: 401 });
         }
 
