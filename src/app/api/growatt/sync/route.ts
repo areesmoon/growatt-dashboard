@@ -28,8 +28,12 @@ const db = getFirestore();
 const username = process.env.GROWATT_USERNAME;
 const password = process.env.GROWATT_PASSWORD;
 const MASTER_CAPACITY_AH = parseFloat(process.env.MASTER_CAPACITY_AH || '100');
+const SLAVE_CAPACITY_AH = parseFloat(process.env.SLAVE_CAPACITY_AH || '100');
+const INV_STANDBY_THRESHOLD = parseFloat(process.env.INV_STANDBY_THRESHOLD_AMP || '-0.4');
 const PV_POWER_MIN = parseFloat(process.env.PV_POWER_MIN || '5');
 const FIRESTORE_COLLECTION = process.env.FIRESTORE_COLLECTION || 'bms_logs';
+
+const INTERVAL_MINUTES = parseInt(process.env.INTERVAL_MINUTES || '5', 10);
 
 // --- HELPER FORMAT WAKTU WIB ---
 function formatWibTime(isoString?: string): string {
@@ -89,6 +93,7 @@ export async function GET(request: NextRequest) {
         const statusData = deviceNode.statusData || {};
         const historyLast = deviceNode.historyLast || {};
         const totalData = deviceNode.totalData || {};
+        const deviceData = deviceNode.deviceData || {};
 
         // 6.1. gridPower
         const gridPower = parseFloat(statusData.gridPower || '0');
@@ -129,8 +134,11 @@ export async function GET(request: NextRequest) {
 
         let currentTimestampStr = '';
         if (rawUpdateTime) {
+            // Ubah spasi jadi 'T' lalu tempel '+07:00' di belakangnya secara sah
+            // Hasilnya jadi: "2026-07-27T17:27:40+07:00"
             currentTimestampStr = rawUpdateTime.replace(' ', 'T') + '+07:00';
         } else {
+            // Fallback kalau kosong
             currentTimestampStr = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Jakarta' }).replace(' ', 'T') + '+07:00';
         }
 
@@ -139,26 +147,16 @@ export async function GET(request: NextRequest) {
             .limit(1)
             .get();
 
-        // 10. Variabel Pendukung System & Master
+        // 10. Menghitung tegangan rata-rata (vBat) antara t-5 dan t-0, serta inisialisasi nilai energi kumulatif
         let totalVoltage = rawTotalVoltage;
+        let lastChargeTotal = powerChargeTotal;
+        let lastDischargeTotal = powerDischargeTotal;
+        const dischgCurr = parseFloat(historyLast.dischgCurr || '0');
+
         let lastMasterSoc = masterSoc;
         let lastInverterMode = currentInverterMode;
         let lastGridVoltage = gridVoltage;
         let lastTotalPpv = totalPpv;
-
-        // Default payload slave jika belum ada record sama sekali
-        let slavePayload = {
-            ah: currentMasterAh,
-            soc: masterSoc,
-            voltage: totalVoltage,
-            current: 0,
-            power: 0,
-            soh: parseFloat(historyLast.soh || '100'),
-            cycleCount: parseInt(historyLast.cycleCount || '0', 10),
-            temperature: parseFloat(historyLast.bmsBatteryTemp || '0'),
-            statusBms: 'STANDBY',
-            cellVoltageAvg: 0
-        };
 
         if (!lastSnapshot.empty) {
             const lastDoc = lastSnapshot.docs[0].data();
@@ -179,31 +177,113 @@ export async function GET(request: NextRequest) {
                 totalVoltage = parseFloat(((lastTotalVoltage + rawTotalVoltage) / 2).toFixed(2));
             }
 
-            if (lastDoc.master && lastDoc.master.soc !== undefined) {
-                lastMasterSoc = lastDoc.master.soc;
+            if (lastDoc.system) {
+                lastChargeTotal = lastDoc.system.chargeTotal !== undefined ? lastDoc.system.chargeTotal : powerChargeTotal;
+                lastDischargeTotal = lastDoc.system.dischargeTotal !== undefined ? lastDoc.system.dischargeTotal : powerDischargeTotal;
             }
 
-            // AMBIL FULL DATA SLAVE DARI RECORD SEBELUMNYA (Murni dari uploader Python RS485)
-            if (lastDoc.slave) {
-                slavePayload = {
-                    ah: lastDoc.slave.ah !== undefined ? parseFloat(lastDoc.slave.ah) : slavePayload.ah,
-                    soc: lastDoc.slave.soc !== undefined ? parseFloat(lastDoc.slave.soc) : slavePayload.soc,
-                    voltage: lastDoc.slave.voltage !== undefined ? parseFloat(lastDoc.slave.voltage) : totalVoltage,
-                    current: lastDoc.slave.current !== undefined ? parseFloat(lastDoc.slave.current) : 0,
-                    power: lastDoc.slave.power !== undefined ? parseFloat(lastDoc.slave.power) : 0,
-                    soh: lastDoc.slave.soh !== undefined ? parseFloat(lastDoc.slave.soh) : slavePayload.soh,
-                    cycleCount: lastDoc.slave.cycleCount !== undefined ? parseInt(lastDoc.slave.cycleCount, 10) : slavePayload.cycleCount,
-                    temperature: lastDoc.slave.temperature !== undefined ? parseFloat(lastDoc.slave.temperature) : slavePayload.temperature,
-                    statusBms: lastDoc.slave.statusBms || 'STANDBY',
-                    cellVoltageAvg: lastDoc.slave.cellVoltageAvg !== undefined ? parseFloat(lastDoc.slave.cellVoltageAvg) : 0
-                };
+            if (lastDoc.master && lastDoc.master.soc !== undefined) {
+                lastMasterSoc = lastDoc.master.soc;
             }
         }
 
         const masterVoltage = parseFloat(historyLast.bmsBatteryVolt || totalVoltage);
         const masterPower = masterVoltage * masterCurrent;
 
-        // 11. Menyusun struktur payload final tanpa rumus kalkulasi manual slave
+        // 11. Menghitung arus sementara untuk baterai Slave (Arus sisa mutlak)
+        let slaveCurrent = totalCurrent - masterCurrent;
+        if (masterSoc === 100 && dischgCurr === -INV_STANDBY_THRESHOLD) {
+            slaveCurrent = 0;
+        }
+
+        // Inisialisasi variabel tracking & faktor koreksi
+        let slaveAh = (masterSoc / 100) * SLAVE_CAPACITY_AH;
+        let slaveSoc = masterSoc;
+        let chargeCorrectionFactor = 1.0;
+        let dischargeCorrectionFactor = 1.0;
+        let totalCount = 1;
+
+        // 12. Logika Utama Kalkulasi Arus dan Faktor Koreksi
+        if (!lastSnapshot.empty) {
+            const lastDoc = lastSnapshot.docs[0].data();
+
+            if (lastDoc.calibration && typeof lastDoc.calibration === 'object') {
+                chargeCorrectionFactor = parseFloat(lastDoc.calibration.chargeCorrectionFactor ?? 1.0);
+                dischargeCorrectionFactor = parseFloat(lastDoc.calibration.dischargeCorrectionFactor ?? 1.0);
+                totalCount = parseInt(lastDoc.calibration.totalCount ?? 1, 10);
+            } else {
+                console.log("[INFO] Map 'calibration' belum ada di dokumen Firestore sebelumnya. Menggunakan nilai default awal.");
+            }
+
+            totalCount += 1;
+
+            const lastSlaveAh = lastDoc.slave && lastDoc.slave.ah !== undefined
+                ? lastDoc.slave.ah
+                : ((lastDoc.slave ? lastDoc.slave.soc : masterSoc) / 100) * SLAVE_CAPACITY_AH;
+
+            if (masterSoc === 100) {
+                slaveAh = SLAVE_CAPACITY_AH;
+                slaveSoc = 100.0;
+                console.log("[CALIBRATION] Master SOC 100%. Slave Ah & SOC di-reset otomatis penuh ke 100%.");
+            } else {
+                const hoursDelta = INTERVAL_MINUTES / 60.0;
+                let rawSlaveAhDelta = slaveCurrent * hoursDelta;
+
+                if (slaveCurrent > 0) {
+                    rawSlaveAhDelta *= chargeCorrectionFactor;
+                } else if (slaveCurrent < 0) {
+                    rawSlaveAhDelta *= dischargeCorrectionFactor;
+                }
+
+                let calculatedSlaveAh = lastSlaveAh + rawSlaveAhDelta;
+
+                // 13. Aturan Pengaman (Standby Lock & Cap Protection)
+                const inverterChgCurr = parseFloat(historyLast.chgCurr || '0');
+                const slaveSocCheck = (lastSlaveAh / SLAVE_CAPACITY_AH) * 100;
+
+                if ((masterSoc === 100 || lastSlaveAh >= SLAVE_CAPACITY_AH) && (Math.abs(totalCurrent) <= Math.abs(INV_STANDBY_THRESHOLD) || dischgCurr <= Math.abs(INV_STANDBY_THRESHOLD))) {
+                    calculatedSlaveAh = SLAVE_CAPACITY_AH;
+                    console.log("[STANDBY LOCK] Inverter idle / Standby, Slave Ah dikunci penuh.");
+                } else if (lastSlaveAh >= SLAVE_CAPACITY_AH && slaveCurrent > 0) {
+                    calculatedSlaveAh = SLAVE_CAPACITY_AH;
+                    console.log("[CAP PROTECTION] Slave penuh & masih charging, Ah dikunci.");
+                } else if (inverterChgCurr === 0 && slaveSocCheck >= 90.0 && (Math.abs(totalCurrent) <= Math.abs(INV_STANDBY_THRESHOLD) || dischgCurr <= Math.abs(INV_STANDBY_THRESHOLD))) {
+                    calculatedSlaveAh = (masterSoc / 100) * SLAVE_CAPACITY_AH;
+                    console.log(`[AUTO-SYNC FULL] Inverter berhenti nge-charge dengan SOC tinggi. Ah di-sync selaras dengan Master.`);
+                }
+
+                // --- AUTO-CORRECT OTOMATIS (NATIVE TS) ---
+                if (lastSlaveAh < SLAVE_CAPACITY_AH && calculatedSlaveAh >= SLAVE_CAPACITY_AH) {
+                    console.log(`\n🚨 [AUTO-CORRECT TRIGGER] Slave tembus batas penuh (100%). Menjalankan penyesuaian adaptif charge factor otomatis...`);
+
+                    const clampedTargetSlaveAh = SLAVE_CAPACITY_AH;
+                    let adjustmentRatio = lastSlaveAh > 0 ? (clampedTargetSlaveAh / lastSlaveAh) : 1.0;
+
+                    // Hitung hanya untuk charge factor
+                    let calculatedChargeFactor = chargeCorrectionFactor * adjustmentRatio;
+                    const learningRate = 0.15;
+
+                    chargeCorrectionFactor = (chargeCorrectionFactor * (1 - learningRate)) + (calculatedChargeFactor * learningRate);
+                    // dischargeCorrectionFactor DIBIARKAN UTUH karena ini momennya sedang charging/penuh!
+
+                    totalCount = 1;
+                    calculatedSlaveAh = SLAVE_CAPACITY_AH;
+
+                    console.log(`✅ [AUTO-CORRECT SUCCESS] Charge Correction Factor diperbarui ke ${chargeCorrectionFactor.toFixed(4)} & counter direset.`);
+                }
+
+                slaveAh = parseFloat(Math.min(SLAVE_CAPACITY_AH, Math.max(0, calculatedSlaveAh)).toFixed(2));
+                slaveSoc = parseFloat(((slaveAh / SLAVE_CAPACITY_AH) * 100).toFixed(2));
+                console.log(`[RESULT] Slave Ah: ${slaveAh}Ah / ${SLAVE_CAPACITY_AH}Ah | Slave SOC: ${slaveSoc}%`);
+            }
+        } else {
+            console.log("[BOOTSTRAP] Belum ada data historis di Firestore. Inisialisasi awal Ah berbasis Master.");
+        }
+
+        const slaveVoltage = totalVoltage;
+        const slavePower = slaveVoltage * slaveCurrent;
+
+        // 14. Menyusun struktur payload dengan Map 'calibration' yang bersih dan fungsional
         const currentTimestamp = currentTimestampStr;
 
         const firestorePayload = {
@@ -235,10 +315,21 @@ export async function GET(request: NextRequest) {
                 temperature: parseFloat(historyLast.bmsBatteryTemp || '0'),
                 statusBms: historyLast.bmsStatus || '0'
             },
-            slave: slavePayload
+            slave: {
+                ah: slaveAh,
+                soc: slaveSoc,
+                voltage: slaveVoltage,
+                current: parseFloat(slaveCurrent.toFixed(2)),
+                power: parseFloat(slavePower.toFixed(2))
+            },
+            calibration: {
+                chargeCorrectionFactor: parseFloat(chargeCorrectionFactor.toFixed(4)),
+                dischargeCorrectionFactor: parseFloat(dischargeCorrectionFactor.toFixed(4)),
+                totalCount: totalCount
+            }
         };
 
-        // 12. Pengecekan duplikat data berdasarkan timestamp
+        // 15. Pengecekan duplikat data berdasarkan timestamp
         const existingDocs = await db.collection(FIRESTORE_COLLECTION)
             .where('timestamp', '==', currentTimestamp)
             .limit(1)
@@ -253,41 +344,123 @@ export async function GET(request: NextRequest) {
         const waNumber = process.env.WA_TARGET_NUMBER || '';
 
         // -------------------------------------------------------------
-        // 🚨 WHATSAPP ALERTS (Suplai, PLN, Master 100%, Solar, Bat2Grid, Critical)
+        // 🚨 WHATSAPP ALERT: Deteksi Perubahan Suplai Beban (PLTS / PLN)
         // -------------------------------------------------------------
         if (lastInverterMode !== currentInverterMode) {
-            let modeMessage = currentInverterMode === "SBU" 
-                ? `🔋 *POWER ALERT*\n\nSuplai beban berpindah ke *PLTS*.\n🕒 Waktu: ${timeWib}`
-                : `⚡ *POWER ALERT*\n\nSuplai beban berpindah ke *PLN*.\n🕒 Waktu: ${timeWib}`;
-            try { await wa.sendMessage(waNumber, modeMessage); } catch (e: any) { console.error("WA Error:", e.message); }
+            let modeMessage = "";
+
+            if (currentInverterMode === "SBU") {
+                modeMessage = `🔋 *POWER ALERT*\n\nSuplai beban berpindah ke *PLTS*.\n🕒 Waktu: ${timeWib}`;
+            } else {
+                modeMessage = `⚡ *POWER ALERT*\n\nSuplai beban berpindah ke *PLN*.\n🕒 Waktu: ${timeWib}`;
+            }
+
+            try {
+                await wa.sendMessage(waNumber, modeMessage);
+                console.log(`📨 Notifikasi WA Perubahan Suplai (${currentInverterMode}) berhasil dikirim!`);
+            } catch (waError: any) {
+                console.error("❌ Gagal kirim notifikasi WA Suplai:", waError.message);
+            }
         }
 
+        // -------------------------------------------------------------
+        // 🚨 WHATSAPP ALERT: Deteksi Perubahan Status PLN (Mati / Nyala)
+        // -------------------------------------------------------------
         const isPlnUpNow = gridVoltage > 150;
         const isPlnUpBefore = lastGridVoltage > 150;
+
         if (isPlnUpBefore !== isPlnUpNow) {
-            let plnMsg = !isPlnUpNow 
-                ? `🚨 *PLN BLACKOUT ALERT*\n\nJalur PLN padam!\n🕒 Waktu: ${timeWib}`
-                : `⚡ *PLN NORMAL RESTORED*\n\nJalur PLN menyala kembali (${gridVoltage}V).\n🕒 Waktu: ${timeWib}`;
-            try { await wa.sendMessage(waNumber, plnMsg); } catch (e: any) { console.error("WA Error:", e.message); }
+            let plnAlertMessage = "";
+
+            if (!isPlnUpNow) {
+                plnAlertMessage = `🚨 *PLN BLACKOUT ALERT*\n\nJalur PLN padam! Sistem sepenuhnya mengandalkan backup baterai/solar.\n🕒 Waktu: ${timeWib}`;
+            } else {
+                plnAlertMessage = `⚡ *PLN NORMAL RESTORED*\n\nJalur PLN menyala kembali! Tegangan Grid pulih normal di *${gridVoltage}V*.\n🕒 Waktu: ${timeWib}`;
+            }
+
+            try {
+                await wa.sendMessage(waNumber, plnAlertMessage);
+                console.log(`📨 Notifikasi WA Status PLN (${isPlnUpNow ? 'Nyala Kembali' : 'Padam'}) berhasil dikirim!`);
+            } catch (waError: any) {
+                console.error("❌ Gagal kirim notifikasi WA Status PLN:", waError.message);
+            }
         }
 
+        // -------------------------------------------------------------
+        // 🚨 WHATSAPP ALERT: Deteksi Master SOC 100% Penuh
+        // -------------------------------------------------------------
         if (lastMasterSoc < 100 && masterSoc === 100) {
-            try { await wa.sendMessage(waNumber, `🔋 *BMS MASTER FULL ALERT*\n\nBaterai Master mencapai 100% penuh!\n🕒 Waktu: ${timeWib}`); } catch (e: any) {}
+            const alertMessage = `🔋 *BMS MASTER FULL ALERT*\n\nBaterai Master baru saja mencapai 100% penuh!\n⚡ Plant: ${plantObj.plantName || "Rumah Kablukan"}\n🕒 Waktu: ${timeWib}`;
+
+            try {
+                await wa.sendMessage(waNumber, alertMessage);
+                console.log("📨 Notifikasi WhatsApp Master SOC 100% berhasil dikirim!");
+            } catch (waError: any) {
+                console.error("❌ Gagal kirim notifikasi WA Master 100%:", waError.message);
+            }
         }
 
+        // -------------------------------------------------------------
+        // 🚨 WHATSAPP ALERT: Deteksi Status Produksi Panel Surya (PPV)
+        // -------------------------------------------------------------
+        const isSolarProducingNow = totalPpv >= PV_POWER_MIN;
+        const isSolarProducingBefore = lastTotalPpv >= PV_POWER_MIN;
+
+        if (isSolarProducingBefore !== isSolarProducingNow) {
+            let solarAlertMessage = "";
+
+            if (!isSolarProducingNow) {
+                solarAlertMessage = `🌙 *SOLAR PRODUCTION STOPPED*\n\nProduksi panel surya berhenti / habis. Sistem beralih sepenuhnya ke Baterai/PLN.\n🕒 Waktu: ${timeWib}`;
+            } else {
+                solarAlertMessage = `☀️ *SOLAR PRODUCTION STARTED*\n\nPanel surya mulai berproduksi! Daya terdeteksi *${totalPpv}W*.\n🕒 Waktu: ${timeWib}`;
+            }
+
+            try {
+                await wa.sendMessage(waNumber, solarAlertMessage);
+                console.log(`📨 Notifikasi WA Status Panel Surya (${isSolarProducingNow ? 'Mulai Produksi' : 'Habis'}) berhasil dikirim!`);
+            } catch (waError: any) {
+                console.error("❌ Gagal kirim notifikasi WA Panel Surya:", waError.message);
+            }
+        }
+
+        // Ambil threshold dari .env, sediakan nilai default cadangan
         const batToGridThreshold = parseInt(process.env.BAT_TO_GRID_THRESHOLD || '35', 10);
         const batCriticalThreshold = parseInt(process.env.BAT_CRITICAL_THRESHOLD || '22', 10);
+        const batCriticalAlert = parseInt(process.env.BAT_CRITICAL_ALERT || '20', 10);
 
+        // -------------------------------------------------------------
+        // 🚨 WHATSAPP ALERT 1: Batas Baterai Switch ke Grid/PLN (BAT2GRID)
+        // -------------------------------------------------------------
         if (lastMasterSoc > batToGridThreshold && masterSoc <= batToGridThreshold) {
-            try { await wa.sendMessage(waNumber, `⚡ *SWITCH TO GRID ALERT*\n\nKapasitas baterai menyentuh ${masterSoc}%. Inverter switch ke PLN.\n🕒 Waktu: ${timeWib}`); } catch (e: any) {}
+            let bat2GridMessage = `⚡ *SWITCH TO GRID ALERT*\n\nKapasitas baterai PLTS menyentuh *${masterSoc}%* 🔌 Inverter akan switch suplai beban ke jalur PLN.\n🕒 Waktu: ${timeWib}`;
+
+            try {
+                await wa.sendMessage(waNumber, bat2GridMessage);
+                console.log(`📨 Notifikasi WA BAT2GRID (${masterSoc}%) berhasil dikirim!`);
+            } catch (waError: any) {
+                console.error("❌ Gagal kirim notifikasi WA BAT2GRID:", waError.message);
+            }
         }
 
+        // -------------------------------------------------------------
+        // 🚨 WHATSAPP ALERT 2: Early Warning Baterai Kritis (Mau Habis)
+        // -------------------------------------------------------------
         if (lastMasterSoc > batCriticalThreshold && masterSoc <= batCriticalThreshold) {
-            try { await wa.sendMessage(waNumber, `🚨 *CRITICAL BATTERY WARNING*\n\nKapasitas baterai turun ke ${masterSoc}%!\n🕒 Waktu: ${timeWib}`); } catch (e: any) {}
+            let earlyWarningMessage = `🚨 *CRITICAL BATTERY WARNING*\n\nKapasitas baterai PLTS turun ke angka *${masterSoc}%*! (Mendekati batas kritis di ${batCriticalAlert}%).\n⚠️ Inverter akan segera shutdown total jika tidak ada suplai lain. Segera ambil tindakan!\n🕒 Waktu: ${timeWib}`;
+
+            try {
+                await wa.sendMessage(waNumber, earlyWarningMessage);
+                console.log(`📨 Notifikasi WA Baterai Kritis (${masterSoc}%) berhasil dikirim!`);
+            } catch (waError: any) {
+                console.error("❌ Gagal kirim notifikasi WA Baterai Kritis:", waError.message);
+            }
         }
 
-        // 13. Simpan ke Firestore
-        const customDocId = currentTimestamp.replace(/[:.]/g, '-').replace('T', '_');
+        // 16. Menyimpan dokumen payload baru ke Firestore dengan Custom ID rapi
+        const customDocId = currentTimestamp
+            .replace(/[:.]/g, '-')
+            .replace('T', '_');
+
         await db.collection(FIRESTORE_COLLECTION).doc(customDocId).set(firestorePayload);
         console.log(`[SUCCESS] Data berhasil disimpan dengan Custom ID: ${customDocId}`);
 
@@ -297,6 +470,7 @@ export async function GET(request: NextRequest) {
         console.error("❌ Gagal ambil data Growatt:", error.message);
         return NextResponse.json({ success: false, error: error.message }, { status: 500 });
     } finally {
+        // --- CLEAN SESSION: LOGOUT BERSIH DI AKHIR SIKLUS ---
         try {
             await growatt.logout();
             console.log('🔒 Sesi Growatt berhasil ditutup (Logout clean).');
