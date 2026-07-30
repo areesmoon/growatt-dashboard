@@ -158,6 +158,20 @@ export async function GET(request: NextRequest) {
         let lastGridVoltage = gridVoltage;
         let lastTotalPpv = totalPpv;
 
+        // Default payload slave jika belum ada record sama sekali
+        let slavePayload = {
+            ah: currentMasterAh,
+            soc: masterSoc,
+            voltage: totalVoltage,
+            current: 0,
+            power: 0,
+            soh: parseFloat(historyLast.soh || '100'),
+            cycleCount: parseInt(historyLast.cycleCount || '0', 10),
+            temperature: parseFloat(historyLast.bmsBatteryTemp || '0'),
+            statusBms: 'STANDBY',
+            cellVoltageAvg: 0
+        };
+
         if (!lastSnapshot.empty) {
             const lastDoc = lastSnapshot.docs[0].data();
 
@@ -184,6 +198,22 @@ export async function GET(request: NextRequest) {
 
             if (lastDoc.master && lastDoc.master.soc !== undefined) {
                 lastMasterSoc = lastDoc.master.soc;
+            }
+
+            // AMBIL FULL DATA SLAVE DARI RECORD SEBELUMNYA (Murni dari uploader Python RS485)
+            if (lastDoc.slave) {
+                slavePayload = {
+                    ah: lastDoc.slave.ah !== undefined ? parseFloat(lastDoc.slave.ah) : slavePayload.ah,
+                    soc: lastDoc.slave.soc !== undefined ? parseFloat(lastDoc.slave.soc) : slavePayload.soc,
+                    voltage: lastDoc.slave.voltage !== undefined ? parseFloat(lastDoc.slave.voltage) : totalVoltage,
+                    current: lastDoc.slave.current !== undefined ? parseFloat(lastDoc.slave.current) : 0,
+                    power: lastDoc.slave.power !== undefined ? parseFloat(lastDoc.slave.power) : 0,
+                    soh: lastDoc.slave.soh !== undefined ? parseFloat(lastDoc.slave.soh) : slavePayload.soh,
+                    cycleCount: lastDoc.slave.cycleCount !== undefined ? parseInt(lastDoc.slave.cycleCount, 10) : slavePayload.cycleCount,
+                    temperature: lastDoc.slave.temperature !== undefined ? parseFloat(lastDoc.slave.temperature) : slavePayload.temperature,
+                    statusBms: lastDoc.slave.statusBms || 'STANDBY',
+                    cellVoltageAvg: lastDoc.slave.cellVoltageAvg !== undefined ? parseFloat(lastDoc.slave.cellVoltageAvg) : 0
+                };
             }
         }
 
@@ -315,13 +345,7 @@ export async function GET(request: NextRequest) {
                 temperature: parseFloat(historyLast.bmsBatteryTemp || '0'),
                 statusBms: historyLast.bmsStatus || '0'
             },
-            slave: {
-                ah: slaveAh,
-                soc: slaveSoc,
-                voltage: slaveVoltage,
-                current: parseFloat(slaveCurrent.toFixed(2)),
-                power: parseFloat(slavePower.toFixed(2))
-            },
+            slave: slavePayload,
             calibration: {
                 chargeCorrectionFactor: parseFloat(chargeCorrectionFactor.toFixed(4)),
                 dischargeCorrectionFactor: parseFloat(dischargeCorrectionFactor.toFixed(4)),
