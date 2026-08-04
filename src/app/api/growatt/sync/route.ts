@@ -52,6 +52,32 @@ function formatWibTime(isoString?: string): string {
 }
 
 // ==========================================
+// HELPER: Hapus data slave lama yang sudah disinkronkan
+// ==========================================
+async function cleanupOldSlaveLogs(maxTimestampStr: string) {
+    try {
+        const slaveRef = db.collection(SLAVE_COLLECTION);
+        // Ambil semua record slave yang timestamp-nya <= waktu sync saat ini
+        const oldLogsQuery = slaveRef
+            .where('timestamp', '<=', maxTimestampStr)
+            .limit(100); // Batasi per batch agar aman dari limit Firestore
+
+        const snapshot = await oldLogsQuery.get();
+        if (snapshot.empty) return;
+
+        const batch = db.batch();
+        snapshot.docs.forEach((doc) => {
+            batch.delete(doc.ref);
+        });
+
+        await batch.commit();
+        console.log(`🧹 [CLEANUP SUCCESS] Berhasil menghapus ${snapshot.size} record lama di ${SLAVE_COLLECTION}.`);
+    } catch (error: any) {
+        console.error("⚠️ [CLEANUP ERROR] Gagal membersihkan record slave lama:", error.message);
+    }
+}
+
+// ==========================================
 // HELPER: Cari log slave terdekat (Prioritas: Masa Depan / Lebih Update dulu)
 // ==========================================
 async function getClosestSlaveLog(targetTimestampStr: string) {
@@ -549,6 +575,10 @@ export async function GET(request: NextRequest) {
 
         await db.collection(FIRESTORE_COLLECTION).doc(customDocId).set(firestorePayload);
         console.log(`[SUCCESS] Data berhasil disimpan dengan Custom ID: ${customDocId}`);
+
+        // --- TAMBAHAN: BERSIHKAN SLAVE LOG LAMA YANG SUDAH KESISKRON ---
+        // Kita hapus data slave yang timestamp-nya <= currentTimestamp saat ini
+        await cleanupOldSlaveLogs(currentTimestamp);
 
         return NextResponse.json({ success: true, docId: customDocId, timestamp: currentTimestamp });
 
