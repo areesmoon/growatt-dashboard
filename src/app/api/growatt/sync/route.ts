@@ -33,8 +33,14 @@ const INV_STANDBY_THRESHOLD = parseFloat(process.env.INV_STANDBY_THRESHOLD_AMP |
 const PV_POWER_MIN = parseFloat(process.env.PV_POWER_MIN || '5');
 const FIRESTORE_COLLECTION = process.env.FIRESTORE_COLLECTION || 'bms_logs';
 const SLAVE_COLLECTION = FIRESTORE_COLLECTION + "_slave";
-
 const INTERVAL_MINUTES = parseInt(process.env.INTERVAL_MINUTES || '5', 10);
+
+// High load settings
+const HIGH_LOAD_COLLECTION = FIRESTORE_COLLECTION + "_high_load";
+const HIGH_LOAD_POWER = parseFloat(process.env.HIGH_LOAD_POWER || '1200');
+// Konfigurasi interval waktu anomali (Default 1.5 jam = 90 menit, bisa diatur via env dalam satuan jam)
+const HIGH_LOAD_INTERVAL_HOURS = parseFloat(process.env.HIGH_LOAD_INTERVAL_HOURS || '1.5');
+const HIGH_LOAD_THRESHOLD_MINUTES = HIGH_LOAD_INTERVAL_HOURS * 60;
 
 // --- HELPER FORMAT WAKTU WIB ---
 function formatWibTime(isoString?: string): string {
@@ -565,6 +571,57 @@ export async function GET(request: NextRequest) {
                 console.log(`📨 Notifikasi WA Status Panel Surya (${isSolarProducingNow ? 'Mulai Produksi' : 'Habis'}) berhasil dikirim!`);
             } catch (waError: any) {
                 console.error("❌ Gagal kirim notifikasi WA Panel Surya:", waError.message);
+            }
+        }
+
+        // -------------------------------------------------------------
+        // 🚨 WHATSAPP ALERT & HISTORY: Deteksi High Load & Anomali Berulang (Dinamis via Env)
+        // -------------------------------------------------------------
+        if (loadPower >= HIGH_LOAD_POWER) {
+            const highLoadRef = db.collection(HIGH_LOAD_COLLECTION);
+            
+            // Ambil record high load terakhir sebelum yang ini
+            const lastHighLoadSnapshot = await highLoadRef
+                .orderBy('timestamp', 'desc')
+                .limit(1)
+                .get();
+
+            let shouldAlert = false;
+            let timeDiffMinutes = 0;
+
+            if (!lastHighLoadSnapshot.empty) {
+                const lastHighLoadDoc = lastHighLoadSnapshot.docs[0].data();
+                const lastTimeMs = new Date(lastHighLoadDoc.timestamp).getTime();
+                const currentTimeMs = new Date(currentTimestampStr).getTime();
+                
+                // Hitung selisih waktu dalam menit
+                timeDiffMinutes = (currentTimeMs - lastTimeMs) / (1000 * 60);
+
+                // Jika jarak dari high load sebelumnya <= threshold (default 1.5 jam / 90 menit), indikasi anomali berulang!
+                if (timeDiffMinutes <= HIGH_LOAD_THRESHOLD_MINUTES) {
+                    shouldAlert = true; 
+                }
+            }
+
+            // Simpan record high load saat ini ke koleksi khusus
+            await highLoadRef.add({
+                timestamp: currentTimestampStr,
+                loadPower: loadPower,
+                masterSoc: masterSoc,
+                timeDiffMinutesSinceLast: Math.round(timeDiffMinutes)
+            });
+            console.log(`⚠️ [HIGH LOAD LOG] Tercatat lonjakan ${loadPower}W disimpan ke '${HIGH_LOAD_COLLECTION}'. (Jarak dari sebelumnya: ~${Math.round(timeDiffMinutes)} menit)`);
+
+            // Kirim WhatsApp HANYA JIKA terdeteksi berulang dalam rentang waktu env
+            if (shouldAlert) {
+                const anomalyMessage = `🚨 *ANOMALI PEMAKAIAN DAYA TINGGI BERULANG*\n\nPompa/Beban tinggi terdeteksi kembali! Daya: *${loadPower}W*\n⏱️ Jarak dari lonjakan sebelumnya: *~${Math.round(timeDiffMinutes)} menit* (<= ${HIGH_LOAD_INTERVAL_HOURS} jam).\n🔋 Sisa SOC Master: *${masterSoc}%*\n\n⚠️ *Kemungkinan besar ada pompa air / keran yang menyala otomatis terus-menerus! Segera cek TKP.*\n🕒 Waktu: ${timeWib}`;
+
+                try {
+                    await wa.sendMessage(waNumber, anomalyMessage);
+                    console.log(`📨 Notifikasi WA Anomali High Load Berulang berhasil dikirim!`);
+                } catch (waError: any) {
+                    console.error("❌ Gagal kirim notifikasi WA Anomali:", waError.message);
+                }
             }
         }
 
