@@ -58,7 +58,24 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // 3. Susun data payload slave secara mandiri
+        // Helper akurat untuk format WIB: "2026-07-27T17:32:47+07:00"
+        const getWibTimestampString = () => {
+            const now = new Date();
+            const formatter = new Intl.DateTimeFormat('sv-SE', {
+                timeZone: 'Asia/Jakarta',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+            });
+            // sv-SE menghasilkan format "YYYY-MM-DD HH:mm:ss" secara rapi
+            return formatter.format(now).replace(' ', 'T') + '+07:00';
+        };
+
+        // 3. Susun data payload slave
         const slaveDocPayload = {
             ah: body.ah !== undefined ? parseFloat(body.ah) : 0,
             soc: body.soc !== undefined ? parseFloat(body.soc) : 0,
@@ -70,7 +87,8 @@ export async function POST(request: NextRequest) {
             temperature: body.temperature !== undefined ? parseFloat(body.temperature) : 0,
             statusBms: body.statusBms || 'STANDBY',
             cellVoltageAvg: body.cellVoltageAvg !== undefined ? parseFloat(body.cellVoltageAvg) : 0,
-            timestamp: body.timestamp !== undefined ? Number(body.timestamp) : Date.now()
+            // Jika body.timestamp dari Python valid, pakai itu. Kalau kosong/null, generate otomatis pakai fungsi aman.
+            timestamp: (body.timestamp && typeof body.timestamp === 'string') ? body.timestamp : getWibTimestampString()
         };
 
         // 4. Langsung simpan (insert) ke koleksi bms_logs_slave
