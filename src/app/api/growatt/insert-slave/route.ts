@@ -75,8 +75,14 @@ export async function POST(request: NextRequest) {
             return formatter.format(now).replace(' ', 'T') + '+07:00';
         };
 
-        // 3. Susun data payload slave
+        // 3. Pastikan string timestamp tersedia (ambil dari body atau generate baru)
+        const finalTimestamp = (body.timestamp && typeof body.timestamp === 'string') 
+            ? body.timestamp 
+            : getWibTimestampString();
+
+        // 4. Susun data payload slave
         const slaveDocPayload = {
+            timestamp: finalTimestamp,
             ah: body.ah !== undefined ? parseFloat(body.ah) : 0,
             soc: body.soc !== undefined ? parseFloat(body.soc) : 0,
             voltage: body.voltage !== undefined ? parseFloat(body.voltage) : 0,
@@ -86,19 +92,23 @@ export async function POST(request: NextRequest) {
             cycleCount: body.cycleCount !== undefined ? parseInt(body.cycleCount, 10) : 0,
             temperature: body.temperature !== undefined ? parseFloat(body.temperature) : 0,
             statusBms: body.statusBms || 'STANDBY',
-            cellVoltageAvg: body.cellVoltageAvg !== undefined ? parseFloat(body.cellVoltageAvg) : 0,
-            // Jika body.timestamp dari Python valid, pakai itu. Kalau kosong/null, generate otomatis pakai fungsi aman.
-            timestamp: (body.timestamp && typeof body.timestamp === 'string') ? body.timestamp : getWibTimestampString()
+            cellVoltageAvg: body.cellVoltageAvg !== undefined ? parseFloat(body.cellVoltageAvg) : 0
         };
 
-        // 4. Langsung simpan (insert) ke koleksi bms_logs_slave
-        const docRef = await db.collection(SLAVE_COLLECTION).add(slaveDocPayload);
+        // 5. Buat Custom Doc ID yang aman dari karakter ilegal (ganti colon ':' jadi dash '-')
+        // Contoh hasil: "2026-07-28_23-56-08+07-00"
+        const customDocId = finalTimestamp
+            .replace(/[:.]/g, '-')
+            .replace('T', '_');
 
-        console.log(`✅ [SLAVE INSERT] Berhasil menyimpan data ke collection '${SLAVE_COLLECTION}' [ID: ${docRef.id}]`);
+        // 6. Simpan menggunakan .doc(customDocId).set() agar ID rapi dan terurut
+        await db.collection(SLAVE_COLLECTION).doc(customDocId).set(slaveDocPayload);
+
+        console.log(`✅ [SLAVE INSERT] Berhasil menyimpan data ke collection '${SLAVE_COLLECTION}' dengan ID: ${customDocId}`);
 
         return NextResponse.json({ 
             success: true, 
-            docId: docRef.id, 
+            docId: customDocId, 
             data: slaveDocPayload 
         });
 
