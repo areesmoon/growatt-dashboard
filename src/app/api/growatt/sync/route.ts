@@ -263,7 +263,7 @@ export async function GET(request: NextRequest) {
             }
 
             // AMBIL FULL DATA SLAVE DARI RECORD SEBELUMNYA (Murni dari uploader Python RS485)
-            if (lastDoc.slave) {
+            /* if (lastDoc.slave) {
                 slavePayload = {
                     ah: lastDoc.slave.ah !== undefined ? parseFloat(lastDoc.slave.ah) : slavePayload.ah,
                     soc: lastDoc.slave.soc !== undefined ? parseFloat(lastDoc.slave.soc) : slavePayload.soc,
@@ -276,7 +276,7 @@ export async function GET(request: NextRequest) {
                     statusBms: lastDoc.slave.statusBms || 'STANDBY',
                     cellVoltageAvg: lastDoc.slave.cellVoltageAvg !== undefined ? parseFloat(lastDoc.slave.cellVoltageAvg) : 0
                 };
-            }
+            } */
         }
 
         const masterVoltage = parseFloat(historyLast.bmsBatteryVolt || totalVoltage);
