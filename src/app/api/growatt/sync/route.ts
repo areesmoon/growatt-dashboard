@@ -32,6 +32,7 @@ const SLAVE_CAPACITY_AH = parseFloat(process.env.SLAVE_CAPACITY_AH || '100');
 const INV_STANDBY_THRESHOLD = parseFloat(process.env.INV_STANDBY_THRESHOLD_AMP || '-0.4');
 const PV_POWER_MIN = parseFloat(process.env.PV_POWER_MIN || '5');
 const FIRESTORE_COLLECTION = process.env.FIRESTORE_COLLECTION || 'bms_logs';
+const SLAVE_COLLECTION = FIRESTORE_COLLECTION + "_slave";
 
 const INTERVAL_MINUTES = parseInt(process.env.INTERVAL_MINUTES || '5', 10);
 
@@ -48,6 +49,45 @@ function formatWibTime(isoString?: string): string {
         second: '2-digit',
         hour12: false
     }).replace(/\./g, ':');
+}
+
+// ==========================================
+// HELPER: Cari log slave terdekat (Prioritas: Masa Depan / Lebih Update dulu)
+// ==========================================
+async function getClosestSlaveLog(targetTimestampStr: string) {
+    const slaveRef = db.collection(SLAVE_COLLECTION);
+    const targetMs = new Date(targetTimestampStr).getTime();
+
+    // 1. PRIORITAS UTAMA: Cari data masa depan / lebih update (>= targetTimestampStr)
+    const queryFuture = slaveRef
+        .where('timestamp', '>=', targetTimestampStr)
+        .orderBy('timestamp', 'asc')
+        .limit(1);
+
+    const snapshotFuture = await queryFuture.get();
+
+    // Jika data masa depan ditemukan, langsung ambil karena itu yang paling update/dekat
+    if (!snapshotFuture.empty) {
+        const doc = snapshotFuture.docs[0];
+        const data = doc.data();
+        return data;
+    }
+
+    // 2. FALLBACK: Jika data masa depan kosong, baru cari ke masa lalu (<= targetTimestampStr)
+    const queryPast = slaveRef
+        .where('timestamp', '<=', targetTimestampStr)
+        .orderBy('timestamp', 'desc')
+        .limit(1);
+
+    const snapshotPast = await queryPast.get();
+
+    if (!snapshotPast.empty) {
+        const doc = snapshotPast.docs[0];
+        const data = doc.data();
+        return data;
+    }
+
+    return null; // Jika dua-duanya kosong
 }
 
 export async function GET(request: NextRequest) {
@@ -159,18 +199,40 @@ export async function GET(request: NextRequest) {
         let lastTotalPpv = totalPpv;
 
         // Default payload slave jika belum ada record sama sekali
-        let slavePayload = {
-            ah: currentMasterAh,
-            soc: masterSoc,
-            voltage: totalVoltage,
-            current: 0,
-            power: 0,
-            soh: parseFloat(historyLast.soh || '100'),
-            cycleCount: parseInt(historyLast.cycleCount || '0', 10),
-            temperature: parseFloat(historyLast.bmsBatteryTemp || '0'),
-            statusBms: 'STANDBY',
-            cellVoltageAvg: 0
-        };
+        let slavePayload = null;
+        const nearestSlaveData = await getClosestSlaveLog(currentTimestampStr);
+
+        if (nearestSlaveData) {
+            // Jika ketemu data slave fisik terdekat, gunakan itu!
+            slavePayload = {
+                ah: nearestSlaveData.ah !== undefined ? parseFloat(nearestSlaveData.ah) : currentMasterAh,
+                soc: nearestSlaveData.soc !== undefined ? parseFloat(nearestSlaveData.soc) : masterSoc,
+                voltage: nearestSlaveData.voltage !== undefined ? parseFloat(nearestSlaveData.voltage) : rawTotalVoltage,
+                current: nearestSlaveData.current !== undefined ? parseFloat(nearestSlaveData.current) : 0,
+                power: nearestSlaveData.power !== undefined ? parseFloat(nearestSlaveData.power) : 0,
+                soh: nearestSlaveData.soh !== undefined ? parseFloat(nearestSlaveData.soh) : 100,
+                cycleCount: nearestSlaveData.cycleCount !== undefined ? parseInt(nearestSlaveData.cycleCount, 10) : 0,
+                temperature: nearestSlaveData.temperature !== undefined ? parseFloat(nearestSlaveData.temperature) : 0,
+                statusBms: nearestSlaveData.statusBms || 'STANDBY',
+                cellVoltageAvg: nearestSlaveData.cellVoltageAvg !== undefined ? parseFloat(nearestSlaveData.cellVoltageAvg) : 0
+            };
+            console.log(`🔗 [SYNC SLAVE SUCCESS] Berhasil menyandingkan data fisik BMS Slave (Timestamp: ${nearestSlaveData.timestamp}) dengan Inverter Growatt.`);
+        } else {
+            // Fallback cadangan jika collection slave masih kosong / belum ada data
+            console.log(`⚠️ [SYNC SLAVE WARNING] Data bms_logs_slave tidak ditemukan untuk waktu ini. Menggunakan nilai fallback Master.`);
+            slavePayload = {
+                ah: currentMasterAh,
+                soc: masterSoc,
+                voltage: rawTotalVoltage,
+                current: 0,
+                power: 0,
+                soh: parseFloat(historyLast.soh || '100'),
+                cycleCount: parseInt(historyLast.cycleCount || '0', 10),
+                temperature: parseFloat(historyLast.bmsBatteryTemp || '0'),
+                statusBms: 'STANDBY',
+                cellVoltageAvg: 0
+            };
+        }
 
         if (!lastSnapshot.empty) {
             const lastDoc = lastSnapshot.docs[0].data();
