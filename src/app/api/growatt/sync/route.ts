@@ -41,6 +41,7 @@ const HIGH_LOAD_POWER = parseFloat(process.env.HIGH_LOAD_POWER || '1200');
 // Konfigurasi interval waktu anomali (Default 1.5 jam = 90 menit, bisa diatur via env dalam satuan jam)
 const HIGH_LOAD_INTERVAL_HOURS = parseFloat(process.env.HIGH_LOAD_INTERVAL_HOURS || '1.5');
 const HIGH_LOAD_THRESHOLD_MINUTES = HIGH_LOAD_INTERVAL_HOURS * 60;
+const HIGH_LOAD_MIN_MINUTES = parseFloat(process.env.HIGH_LOAD_MIN_MINUTES || '15');
 
 // --- HELPER FORMAT WAKTU WIB ---
 function formatWibTime(isoString?: string): string {
@@ -575,7 +576,7 @@ export async function GET(request: NextRequest) {
         }
 
         // -------------------------------------------------------------
-        // 🚨 WHATSAPP ALERT & HISTORY: Deteksi High Load & Anomali Berulang (Dinamis via Env)
+        // 🚨 WHATSAPP ALERT & HISTORY: Deteksi High Load & Anomali Berulang (Dengan Filter Durasi Minimal)
         // -------------------------------------------------------------
         if (loadPower >= HIGH_LOAD_POWER) {
             const highLoadRef = db.collection(HIGH_LOAD_COLLECTION);
@@ -588,6 +589,7 @@ export async function GET(request: NextRequest) {
 
             let shouldAlert = false;
             let timeDiffMinutes = 0;
+            let shouldSaveLog = true; // Flag untuk kontrol simpan log
 
             if (!lastHighLoadSnapshot.empty) {
                 const lastHighLoadDoc = lastHighLoadSnapshot.docs[0].data();
@@ -597,31 +599,40 @@ export async function GET(request: NextRequest) {
                 // Hitung selisih waktu dalam menit
                 timeDiffMinutes = (currentTimeMs - lastTimeMs) / (1000 * 60);
 
-                // Jika jarak dari high load sebelumnya <= threshold (default 1.5 jam / 90 menit), indikasi anomali berulang!
-                if (timeDiffMinutes <= HIGH_LOAD_THRESHOLD_MINUTES) {
+                // CEK 1: Jika jaraknya TERLALU CEPAT (< 10 menit), ini masih dalam satu siklus nyala pompa yang sama!
+                if (timeDiffMinutes < HIGH_LOAD_MIN_MINUTES) {
+                    shouldSaveLog = false; // Jangan simpan log beruntun di tengah siklus yang sama
+                    shouldAlert = false;
+                } 
+                // CEK 2: Jika jaraknya berada di antara batas minimal dan maksimal (misal: 10 menit s/d 1.5 jam)
+                else if (timeDiffMinutes <= HIGH_LOAD_THRESHOLD_MINUTES) {
                     shouldAlert = true; 
                 }
             }
 
-            // Simpan record high load saat ini ke koleksi khusus
-            await highLoadRef.add({
-                timestamp: currentTimestampStr,
-                loadPower: loadPower,
-                masterSoc: masterSoc,
-                timeDiffMinutesSinceLast: Math.round(timeDiffMinutes)
-            });
-            console.log(`⚠️ [HIGH LOAD LOG] Tercatat lonjakan ${loadPower}W disimpan ke '${HIGH_LOAD_COLLECTION}'. (Jarak dari sebelumnya: ~${Math.round(timeDiffMinutes)} menit)`);
+            // Simpan record high load HANYA JIKA lolos filter batas minimal siklus
+            if (shouldSaveLog) {
+                await highLoadRef.add({
+                    timestamp: currentTimestampStr,
+                    loadPower: loadPower,
+                    masterSoc: masterSoc,
+                    timeDiffMinutesSinceLast: Math.round(timeDiffMinutes)
+                });
+                console.log(`⚠️ [HIGH LOAD LOG] Tercatat lonjakan ${loadPower}W disimpan ke '${HIGH_LOAD_COLLECTION}'. (Jarak dari sebelumnya: ~${Math.round(timeDiffMinutes)} menit)`);
 
-            // Kirim WhatsApp HANYA JIKA terdeteksi berulang dalam rentang waktu env
-            if (shouldAlert) {
-                const anomalyMessage = `🚨 *ANOMALI PEMAKAIAN DAYA TINGGI BERULANG*\n\nPompa/Beban tinggi terdeteksi kembali! Daya: *${loadPower}W*\n⏱️ Jarak dari lonjakan sebelumnya: *~${Math.round(timeDiffMinutes)} menit* (<= ${HIGH_LOAD_INTERVAL_HOURS} jam).\n🔋 Sisa SOC Master: *${masterSoc}%*\n\n⚠️ *Kemungkinan besar ada pompa air / keran yang menyala otomatis terus-menerus! Segera cek TKP.*\n🕒 Waktu: ${timeWib}`;
+                // Kirim WhatsApp HANYA JIKA terdeteksi berulang dalam rentang waktu anomali
+                if (shouldAlert) {
+                    const anomalyMessage = `🚨 *ANOMALI PEMAKAIAN DAYA TINGGI BERULANG*\n\nPompa/Beban tinggi terdeteksi kembali! Daya: *${loadPower}W*\n⏱️ Jarak dari lonjakan sebelumnya: *~${Math.round(timeDiffMinutes)} menit* (Rentang: ${HIGH_LOAD_MIN_MINUTES}m - ${HIGH_LOAD_INTERVAL_HOURS}j).\n🔋 Sisa SOC Master: *${masterSoc}%*\n\n⚠️ *Kemungkinan besar ada pompa air / keran yang menyala otomatis terus-menerus! Segera cek TKP.*\n🕒 Waktu: ${timeWib}`;
 
-                try {
-                    await wa.sendMessage(waNumber, anomalyMessage);
-                    console.log(`📨 Notifikasi WA Anomali High Load Berulang berhasil dikirim!`);
-                } catch (waError: any) {
-                    console.error("❌ Gagal kirim notifikasi WA Anomali:", waError.message);
+                    try {
+                        await wa.sendMessage(waNumber, anomalyMessage); // Sesuai variabel waTarget lu
+                        console.log(`📨 Notifikasi WA Anomali High Load Berulang berhasil dikirim!`);
+                    } catch (waError: any) {
+                        console.error("❌ Gagal kirim notifikasi WA Anomali:", waError.message);
+                    }
                 }
+            } else {
+                console.log(`ℹ️ [HIGH LOAD SKIP] Lonjakan ${loadPower}W diabaikan karena baru berjarak ~${Math.round(timeDiffMinutes)} menit (masih dalam siklus pompa yang sama < ${HIGH_LOAD_MIN_MINUTES}m).`);
             }
         }
 
