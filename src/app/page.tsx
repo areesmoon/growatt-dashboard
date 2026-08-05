@@ -257,7 +257,7 @@ export default function Dashboard() {
 
           <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 backdrop-blur-sm shadow flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-mono uppercase tracking-wider text-emerald-400">🔋 Charging</p>
+              <p className="text-[10px] font-mono uppercase tracking-wider text-emerald-400">{isCharging ? '⚡ Charging' : isDischarging ? '🔋 Discharging' : '🔌 Idle'}</p>
               <h3 className="text-xl font-bold text-white font-mono mt-0.5">
                 {system.totalPower ?? 0}<span className="text-xs font-normal text-slate-400">W</span>
               </h3>
