@@ -349,7 +349,7 @@ export async function GET(request: NextRequest) {
             if (masterSoc === 100) {
                 slaveAh = SLAVE_CAPACITY_AH;
                 slaveSoc = 100.0;
-                console.log("[CALIBRATION] Master SOC 100%. Slave Ah & SOC di-reset otomatis penuh ke 100%.");
+                console.log("[CALIBRATION] SOC Master 100%. Slave Ah & SOC di-reset otomatis penuh ke 100%.");
             } else {
                 const hoursDelta = INTERVAL_MINUTES / 60.0;
                 let rawSlaveAhDelta = slaveCurrent * hoursDelta;
@@ -399,7 +399,7 @@ export async function GET(request: NextRequest) {
 
                 slaveAh = parseFloat(Math.min(SLAVE_CAPACITY_AH, Math.max(0, calculatedSlaveAh)).toFixed(2));
                 slaveSoc = parseFloat(((slaveAh / SLAVE_CAPACITY_AH) * 100).toFixed(2));
-                console.log(`[RESULT] Slave Ah: ${slaveAh}Ah / ${SLAVE_CAPACITY_AH}Ah | Slave SOC: ${slaveSoc}%`);
+                console.log(`[RESULT] Slave Ah: ${slaveAh}Ah / ${SLAVE_CAPACITY_AH}Ah | SOC Slave: ${slaveSoc}%`);
             }
         } else {
             console.log("[BOOTSTRAP] Belum ada data historis di Firestore. Inisialisasi awal Ah berbasis Master.");
@@ -471,11 +471,11 @@ export async function GET(request: NextRequest) {
         // 🚨 WHATSAPP ALERT 1: Batas Baterai Switch ke Grid/PLN (BAT2GRID)
         // -------------------------------------------------------------
         if (lastMasterSoc > batToGridThreshold && masterSoc <= batToGridThreshold) {
-            let bat2GridMessage = `⚡ *SWITCH TO GRID ALERT*\n\nKapasitas baterai PLTS menyentuh *${masterSoc}%* 🔌 Inverter akan switch suplai beban ke jalur PLN.\n🕒 Waktu: ${timeWib}`;
+            let bat2GridMessage = `⚡ *SWITCH TO GRID ALERT*\n\nKapasitas baterai PLTS menyentuh batas switch!\n🔋 SOC Master: *${masterSoc}%*\n🔋 SOC Slave: *${slaveSoc}%*\n🔌 Inverter akan switch suplai beban ke jalur PLN.\n🕒 Waktu: ${timeWib}`;
 
             try {
                 await wa.sendMessage(waNumber, bat2GridMessage);
-                console.log(`📨 Notifikasi WA BAT2GRID (${masterSoc}%) berhasil dikirim!`);
+                console.log(`📨 Notifikasi WA BAT2GRID (Master: ${masterSoc}%, Slave: ${slaveSoc}%) berhasil dikirim!`);
             } catch (waError: any) {
                 console.error("❌ Gagal kirim notifikasi WA BAT2GRID:", waError.message);
             }
@@ -485,11 +485,11 @@ export async function GET(request: NextRequest) {
         // 🚨 WHATSAPP ALERT 2: Early Warning Baterai Kritis (Mau Habis)
         // -------------------------------------------------------------
         if (lastMasterSoc > batCriticalThreshold && masterSoc <= batCriticalThreshold) {
-            let earlyWarningMessage = `🚨 *CRITICAL BATTERY WARNING*\n\nKapasitas baterai PLTS turun ke angka *${masterSoc}%*! (Mendekati batas kritis di ${batCriticalAlert}%).\n⚠️ Inverter akan segera shutdown total jika tidak ada suplai lain. Segera ambil tindakan!\n🕒 Waktu: ${timeWib}`;
+            let earlyWarningMessage = `🚨 *CRITICAL BATTERY WARNING*\n\nKapasitas baterai PLTS turun ke angka kritis!\n🔋 SOC Master: *${masterSoc}%*\n🔋 SOC Slave: *${slaveSoc}%* (Mendekati batas kritis di ${batCriticalAlert}%).\n⚠️ Inverter akan segera shutdown total jika tidak ada suplai lain. Segera ambil tindakan!\n🕒 Waktu: ${timeWib}`;
 
             try {
                 await wa.sendMessage(waNumber, earlyWarningMessage);
-                console.log(`📨 Notifikasi WA Baterai Kritis (${masterSoc}%) berhasil dikirim!`);
+                console.log(`📨 Notifikasi WA Baterai Kritis (Master: ${masterSoc}%, Slave: ${slaveSoc}%) berhasil dikirim!`);
             } catch (waError: any) {
                 console.error("❌ Gagal kirim notifikasi WA Baterai Kritis:", waError.message);
             }
@@ -502,9 +502,9 @@ export async function GET(request: NextRequest) {
             let modeMessage = "";
 
             if (currentInverterMode === "SBU") {
-                modeMessage = `🔋 *POWER ALERT*\n\nSuplai beban berpindah ke *PLTS*.\n🕒 Waktu: ${timeWib}`;
+                modeMessage = `🔋 *POWER ALERT*\n\nSuplai beban berpindah ke *PLTS*.\n🔋 SOC Master: *${masterSoc}%* | SOC Slave: *${slaveSoc}%*\n🕒 Waktu: ${timeWib}`;
             } else {
-                modeMessage = `⚡ *POWER ALERT*\n\nSuplai beban berpindah ke *PLN*.\n🕒 Waktu: ${timeWib}`;
+                modeMessage = `⚡ *POWER ALERT*\n\nSuplai beban berpindah ke *PLN*.\n🔋 SOC Master: *${masterSoc}%* | SOC Slave: *${slaveSoc}%*\n🕒 Waktu: ${timeWib}`;
             }
 
             try {
@@ -525,9 +525,9 @@ export async function GET(request: NextRequest) {
             let plnAlertMessage = "";
 
             if (!isPlnUpNow) {
-                plnAlertMessage = `🚨 *PLN BLACKOUT ALERT*\n\nJalur PLN padam! Sistem sepenuhnya mengandalkan backup baterai/solar.\n🕒 Waktu: ${timeWib}`;
+                plnAlertMessage = `🚨 *PLN BLACKOUT ALERT*\n\nJalur PLN padam! Sistem sepenuhnya mengandalkan backup baterai/solar.\n🔋 SOC Master: *${masterSoc}%* | SOC Slave: *${slaveSoc}%*\n🕒 Waktu: ${timeWib}`;
             } else {
-                plnAlertMessage = `⚡ *PLN NORMAL RESTORED*\n\nJalur PLN menyala kembali! Tegangan Grid pulih normal di *${gridVoltage}V*.\n🕒 Waktu: ${timeWib}`;
+                plnAlertMessage = `⚡ *PLN NORMAL RESTORED*\n\nJalur PLN menyala kembali! Tegangan Grid pulih normal di *${gridVoltage}V*.\n🔋 SOC Master: *${masterSoc}%* | SOC Slave: *${slaveSoc}%*\n🕒 Waktu: ${timeWib}`;
             }
 
             try {
@@ -539,14 +539,14 @@ export async function GET(request: NextRequest) {
         }
 
         // -------------------------------------------------------------
-        // 🚨 WHATSAPP ALERT: Deteksi Master SOC 100% Penuh
+        // 🚨 WHATSAPP ALERT: Deteksi SOC Master 100% Penuh
         // -------------------------------------------------------------
         if (lastMasterSoc < 100 && masterSoc === 100) {
-            const alertMessage = `🔋 *BMS MASTER FULL ALERT*\n\nBaterai Master baru saja mencapai 100% penuh!\n⚡ Plant: ${plantObj.plantName || "Rumah Kablukan"}\n🕒 Waktu: ${timeWib}`;
+            const alertMessage = `🔋 *BMS MASTER FULL ALERT*\n\nBaterai Master baru saja mencapai 100% penuh!\n🔋 SOC Master: *${masterSoc}%* | SOC Slave: *${slaveSoc}%*\n⚡ Plant: ${plantObj.plantName || "Rumah Kablukan"}\n🕒 Waktu: ${timeWib}`;
 
             try {
                 await wa.sendMessage(waNumber, alertMessage);
-                console.log("📨 Notifikasi WhatsApp Master SOC 100% berhasil dikirim!");
+                console.log("📨 Notifikasi WhatsApp SOC Master 100% berhasil dikirim!");
             } catch (waError: any) {
                 console.error("❌ Gagal kirim notifikasi WA Master 100%:", waError.message);
             }
@@ -562,9 +562,9 @@ export async function GET(request: NextRequest) {
             let solarAlertMessage = "";
 
             if (!isSolarProducingNow) {
-                solarAlertMessage = `🌙 *SOLAR PRODUCTION STOPPED*\n\nProduksi panel surya berhenti / habis. Sistem beralih sepenuhnya ke Baterai/PLN.\n🔋 Sisa SOC Master: *${masterSoc}%*\n🕒 Waktu: ${timeWib}`;
+                solarAlertMessage = `🌙 *SOLAR PRODUCTION STOPPED*\n\nProduksi panel surya berhenti / habis. Sistem beralih sepenuhnya ke Baterai/PLN.\n🔋 SOC Master: *${masterSoc}%* | SOC Slave: *${slaveSoc}%*\n🕒 Waktu: ${timeWib}`;
             } else {
-                solarAlertMessage = `☀️ *SOLAR PRODUCTION STARTED*\n\nPanel surya mulai berproduksi! Daya terdeteksi *${totalPpv}W*.\n🔋 Sisa SOC Master: *${masterSoc}%*\n🕒 Waktu: ${timeWib}`;
+                solarAlertMessage = `☀️ *SOLAR PRODUCTION STARTED*\n\nPanel surya mulai berproduksi! Daya terdeteksi *${totalPpv}W*.\n🔋 SOC Master: *${masterSoc}%* | SOC Slave: *${slaveSoc}%*\n🕒 Waktu: ${timeWib}`;
             }
 
             try {
@@ -616,16 +616,17 @@ export async function GET(request: NextRequest) {
                     timestamp: currentTimestampStr,
                     loadPower: loadPower,
                     masterSoc: masterSoc,
+                    slaveSoc: slaveSoc, // Ditambahkan juga ke riwayat koleksi high load
                     timeDiffMinutesSinceLast: Math.round(timeDiffMinutes)
                 });
                 console.log(`⚠️ [HIGH LOAD LOG] Tercatat lonjakan ${loadPower}W disimpan ke '${HIGH_LOAD_COLLECTION}'. (Jarak dari sebelumnya: ~${Math.round(timeDiffMinutes)} menit)`);
 
                 // Kirim WhatsApp HANYA JIKA terdeteksi berulang dalam rentang waktu anomali
                 if (shouldAlert) {
-                    const anomalyMessage = `🚨 *ANOMALI PEMAKAIAN DAYA TINGGI BERULANG*\n\nPompa/Beban tinggi terdeteksi kembali! Daya: *${loadPower}W*\n⏱️ Jarak dari lonjakan sebelumnya: *~${Math.round(timeDiffMinutes)} menit* (Rentang: ${HIGH_LOAD_MIN_MINUTES}m - ${HIGH_LOAD_INTERVAL_HOURS}j).\n🔋 Sisa SOC Master: *${masterSoc}%*\n\n⚠️ *Kemungkinan besar ada pompa air / keran yang menyala otomatis terus-menerus! Segera cek TKP.*\n🕒 Waktu: ${timeWib}`;
+                    const anomalyMessage = `🚨 *ANOMALI PEMAKAIAN DAYA TINGGI BERULANG*\n\nPompa/Beban tinggi terdeteksi kembali! Daya: *${loadPower}W*\n⏱️ Jarak dari lonjakan sebelumnya: *~${Math.round(timeDiffMinutes)} menit* (Rentang: ${HIGH_LOAD_MIN_MINUTES}m - ${HIGH_LOAD_INTERVAL_HOURS}j).\n🔋 SOC Master: *${masterSoc}%* | SOC Slave: *${slaveSoc}%*\n\n⚠️ *Kemungkinan besar ada pompa air / keran yang menyala otomatis terus-menerus! Segera cek TKP.*\n🕒 Waktu: ${timeWib}`;
 
                     try {
-                        await wa.sendMessage(waNumber, anomalyMessage); // Sesuai variabel waTarget lu
+                        await wa.sendMessage(waNumber, anomalyMessage);
                         console.log(`📨 Notifikasi WA Anomali High Load Berulang berhasil dikirim!`);
                     } catch (waError: any) {
                         console.error("❌ Gagal kirim notifikasi WA Anomali:", waError.message);
