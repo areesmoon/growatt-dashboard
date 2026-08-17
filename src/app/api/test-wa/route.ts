@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import wa from '@/lib/whatsapp';
+import wa from '@/lib/whatsappV2';
 
 export async function GET(request: NextRequest) {
     try {

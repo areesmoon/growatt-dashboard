@@ -3,7 +3,7 @@ import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 // @ts-ignore
 import api from 'growatt';
-import wa from '@/lib/whatsapp';
+import wa from '@/lib/whatsappV2';
 
 // 1. Inisialisasi koneksi ke Firestore menggunakan environment variables atau service account
 if (getApps().length === 0) {
