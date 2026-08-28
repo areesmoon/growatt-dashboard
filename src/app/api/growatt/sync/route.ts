@@ -408,11 +408,23 @@ export async function GET(request: NextRequest) {
         const slaveVoltage = totalVoltage;
         const slavePower = slaveVoltage * slaveCurrent;
 
+        // --- EKSTRAKSI INDEX TANGGAL, BULAN, DAN TAHUN DARI TIMESTAMP ---
+        // Contoh: currentTimestampStr = "2026-08-28T17:27:40+07:00"
+        const datePart = currentTimestampStr.split('T')[0]; // "2026-08-28"
+        const [yearStr, monthStr, dayStr] = datePart.split('-'); // ["2026", "08", "28"]
+
+        const yearIndex = yearStr;                      // "2026"
+        const monthIndex = `${yearStr}${monthStr}`;     // "202608"
+        const dayIndex = `${yearStr}${monthStr}${dayStr}`; // "20260828"
+
         // 14. Menyusun struktur payload dengan Map 'calibration' yang bersih dan fungsional
         const currentTimestamp = currentTimestampStr;
 
         const firestorePayload = {
             timestamp: currentTimestamp,
+            yearIndex: yearIndex,
+            monthIndex: monthIndex,
+            dayIndex: dayIndex,
             deviceSn: deviceSn,
             plantName: plantObj.plantName || "Rumah Kablukan",
             system: {
