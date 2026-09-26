@@ -233,26 +233,31 @@ export async function GET(request: NextRequest) {
 
         // Default payload slave jika belum ada record sama sekali
         let slavePayload = null;
-        const nearestSlaveData = await getClosestSlaveLog(currentTimestampStr);
 
-        if (nearestSlaveData) {
-            // Jika ketemu data slave fisik terdekat, gunakan itu!
-            slavePayload = {
-                ah: nearestSlaveData.ah !== undefined ? parseFloat(nearestSlaveData.ah) : currentMasterAh,
-                soc: nearestSlaveData.soc !== undefined ? parseFloat(nearestSlaveData.soc) : masterSoc,
-                voltage: nearestSlaveData.voltage !== undefined ? parseFloat(nearestSlaveData.voltage) : rawTotalVoltage,
-                current: nearestSlaveData.current !== undefined ? parseFloat(nearestSlaveData.current) : 0,
-                power: nearestSlaveData.power !== undefined ? parseFloat(nearestSlaveData.power) : 0,
-                soh: nearestSlaveData.soh !== undefined ? parseFloat(nearestSlaveData.soh) : 100,
-                cycleCount: nearestSlaveData.cycleCount !== undefined ? parseInt(nearestSlaveData.cycleCount, 10) : 0,
-                temperature: nearestSlaveData.temperature !== undefined ? parseFloat(nearestSlaveData.temperature) : 0,
-                statusBms: nearestSlaveData.statusBms || 'STANDBY',
-                cellVoltageAvg: nearestSlaveData.cellVoltageAvg !== undefined ? parseFloat(nearestSlaveData.cellVoltageAvg) : 0
-            };
-            console.log(`🔗 [SYNC SLAVE SUCCESS] Berhasil menyandingkan data fisik BMS Slave (Timestamp: ${nearestSlaveData.timestamp}) dengan Inverter Growatt.`);
-        } else {
-            // Fallback cadangan jika collection slave masih kosong / belum ada data
-            console.log(`⚠️ [SYNC SLAVE WARNING] Data bms_logs_slave tidak ditemukan untuk waktu ini. Menggunakan nilai fallback Master.`);
+        if (!lastSnapshot.empty) {
+            const lastDoc = lastSnapshot.docs[0].data();
+
+            // Ambil data slave dari dokumen terakhir kalau field slave-nya ada
+            if (lastDoc.slave) {
+                slavePayload = {
+                    ah: lastDoc.slave.ah !== undefined ? parseFloat(lastDoc.slave.ah) : currentMasterAh,
+                    soc: lastDoc.slave.soc !== undefined ? parseFloat(lastDoc.slave.soc) : masterSoc,
+                    voltage: lastDoc.slave.voltage !== undefined ? parseFloat(lastDoc.slave.voltage) : rawTotalVoltage,
+                    current: lastDoc.slave.current !== undefined ? parseFloat(lastDoc.slave.current) : 0,
+                    power: lastDoc.slave.power !== undefined ? parseFloat(lastDoc.slave.power) : 0,
+                    soh: lastDoc.slave.soh !== undefined ? parseFloat(lastDoc.slave.soh) : 100,
+                    cycleCount: lastDoc.slave.cycleCount !== undefined ? parseInt(lastDoc.slave.cycleCount, 10) : 0,
+                    temperature: lastDoc.slave.temperature !== undefined ? parseFloat(lastDoc.slave.temperature) : 0,
+                    statusBms: lastDoc.slave.statusBms || 'STANDBY',
+                    cellVoltageAvg: lastDoc.slave.cellVoltageAvg !== undefined ? parseFloat(lastDoc.slave.cellVoltageAvg) : 0
+                };
+                console.log(`🔗 [SLAVE CARRY-OVER] Berhasil membawa data slave dari record Firestore sebelumnya.`);
+            }
+        }
+
+        // Kalau benar-benar dokumen pertama kalinya (kosong total), baru pakai fallback Master
+        if (!slavePayload) {
+            console.log(`⚠️ [SLAVE WARNING] Belum ada riwayat slave sebelumnya. Menggunakan nilai fallback Master.`);
             slavePayload = {
                 ah: currentMasterAh,
                 soc: masterSoc,
